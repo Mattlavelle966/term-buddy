@@ -64,6 +64,11 @@ class BuddyUiTests(unittest.TestCase):
                 (True, "make ScrapForm green"),
             )
 
+    def test_explicit_markdown_tool_plan_is_recovered(self):
+        message = "The next step is clear.\n\n**Next tool request:**\n```\ngit show HEAD\n```"
+        self.assertEqual(BuddyUI.extract_tool_request(message), "git show HEAD")
+        self.assertEqual(BuddyUI.extract_tool_request("ordinary ```bash\nls\n``` advice"), "")
+
     def test_project_context_keeps_token_headroom(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(context_window_tokens=10000, chars_per_token_estimate=3.0, project_context_fraction=0.8)

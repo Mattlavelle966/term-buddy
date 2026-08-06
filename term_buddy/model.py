@@ -175,6 +175,8 @@ class ModelClient:
                 "command substitution, or operators such as 2>&1. Do not repeat a failed tool "
                 "with the same path unless new evidence shows that path exists. For the latest "
                 "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
+                " Never describe a planned command or put it in a Markdown block. When another tool "
+                "is needed, the entire response must be exactly `<tool>command</tool>`."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout)
@@ -196,6 +198,8 @@ class ModelClient:
                 "command substitution, or operators such as 2>&1. Do not repeat a failed tool "
                 "with the same path unless new evidence shows that path exists. For the latest "
                 "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
+                " Never describe a planned command or put it in a Markdown block. When another tool "
+                "is needed, the entire response must be exactly `<tool>command</tool>`."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout, activity_callback=activity_callback)

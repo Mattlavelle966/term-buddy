@@ -49,6 +49,7 @@ class BuddyUI:
         self.first_delta_at = 0.0
         self.reasoning_chars = 0
         self.reasoning_started = 0.0
+        self.last_output_tokens = 0
         self.activity_expanded = config.show_activity_panel
         self.activity_log: deque[str] = deque(maxlen=8)
 
@@ -152,6 +153,7 @@ class BuddyUI:
         self.active_request_id = request_id
         self.active_kind = kind
         self.busy = True
+        self.last_output_tokens = 0
         context = self.request_context(kind, prompt, project_mode=requested_project_mode)
         self.stream_text = ""
         self.request_started = time.monotonic()
@@ -212,6 +214,7 @@ class BuddyUI:
         if self.busy:
             self.cancel_current(silent=True)
         self.busy = True
+        self.last_output_tokens = 0
         self.request_serial += 1
         request_id = self.request_serial
         self.active_request_id = request_id
@@ -276,13 +279,12 @@ class BuddyUI:
             self.write("Tool", f"$ {event.get('command')}\n{event.get('output', '')}")
 
     def handle_model_response(self, message: str) -> None:
-        match = re.search(r"<tool>\s*(.*?)\s*</tool>", message, flags=re.DOTALL | re.IGNORECASE)
-        if not match:
+        command = self.extract_tool_request(message)
+        if not command:
             if message.strip().upper() != "SILENT":
                 self.write("Buddy", message)
                 append_event(self.events, "assistant", {"message": message})
             return
-        command = match.group(1).strip().strip("`")
         self.activity_log.append(f"Tool requested: {command}")
         if not self.config.tools:
             self.write("Error", "Buddy tool requests are disabled in configuration.")
@@ -302,6 +304,21 @@ class BuddyUI:
                 self.results.put(("tool_error", (request_id, command, str(exc))))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def extract_tool_request(message: str) -> str:
+        tagged = re.search(r"<tool>\s*(.*?)\s*</tool>", message, flags=re.DOTALL | re.IGNORECASE)
+        if tagged:
+            return tagged.group(1).strip().strip("`")
+        labeled = re.search(
+            r"(?:next\s+tool\s+request|tool\s+request|run\s+this\s+command)\s*:?\s*"
+            r"(?:\*\*)?\s*```(?:bash|sh|shell)?\s*\n?([^\n`]+)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if labeled:
+            return labeled.group(1).strip().removeprefix("$ ")
+        return ""
 
     def restore_session_context(self) -> None:
         """Load prior context without replaying historical questions or tool actions."""
@@ -420,7 +437,10 @@ class BuddyUI:
         if panel_height:
             panel_start = height - 2 - panel_height
             elapsed = time.monotonic() - self.request_started if self.busy and self.request_started else 0
-            generated_tokens = int(len(self.stream_text) / self.config.chars_per_token_estimate)
+            generated_tokens = (
+                int(len(self.stream_text) / self.config.chars_per_token_estimate)
+                if self.stream_text else self.last_output_tokens
+            )
             reasoning_tokens = int(self.reasoning_chars / self.config.chars_per_token_estimate)
             rate = generated_tokens / elapsed if elapsed > 0 else 0
             task = self.active_question.replace("\n", " ") if self.active_question else "No active request"
@@ -497,6 +517,9 @@ class BuddyUI:
                         self.active_kind = ""
                         self.activity_log.append(
                             f"Answer completed: ~{int(len(response) / self.config.chars_per_token_estimate):,} tokens"
+                        )
+                        self.last_output_tokens = int(
+                            len(response) / self.config.chars_per_token_estimate
                         )
                         self.handle_model_response(response)
                         self.stream_text = ""

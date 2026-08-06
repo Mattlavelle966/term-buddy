@@ -67,6 +67,8 @@ Term Buddy executes each through the same read-only policy (or yolo policy), sho
 the results, and lets the model continue investigating without an arbitrary command
 limit. If a requested tool is denied, the reason and allowed alternatives are sent
 back to the model so it can recover instead of abandoning the task.
+Term Buddy also recognizes explicitly labeled Markdown tool requests from models
+that occasionally fail to emit the required `<tool>...</tool>` wrapper.
 
 Autocomplete is off by default because it performs an inference while you edit. To
 enable it, set `"autocomplete": true` in the configuration, restart the session,
