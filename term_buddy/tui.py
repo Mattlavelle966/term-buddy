@@ -14,7 +14,7 @@ from typing import Any
 from .config import Config
 from .events import append_event, read_events
 from .model import ModelClient, ModelError
-from .project import ProjectSnapshot, build_project_snapshot
+from .project import build_project_snapshot
 from .tools import ToolDenied, run_command
 
 
@@ -32,6 +32,9 @@ class BuddyUI:
         self.results: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.pending: deque[tuple[str, str, str]] = deque(maxlen=20)
         self.busy = False
+        self.active_kind = ""
+        self.request_serial = 0
+        self.active_request_id = 0
         self.cwd = os.getcwd()
         self.input_buffer = ""
         self.spinner_frame = 0
@@ -72,23 +75,40 @@ class BuddyUI:
     ) -> None:
         request_cwd = cwd or self.cwd
         if self.busy:
-            if kind == "ask":
-                self.pending.append((kind, prompt, request_cwd))
-            return
+            if self.active_kind == "observe" and kind == "ask":
+                self.cancel_current(silent=True)
+            else:
+                if kind == "ask":
+                    self.pending.append((kind, prompt, request_cwd))
+                return
         if kind == "ask" and not continuation:
             self.active_question = prompt
         self.active_cwd = request_cwd
+        self.request_serial += 1
+        request_id = self.request_serial
+        self.active_request_id = request_id
+        self.active_kind = kind
         self.busy = True
         context = self.context()
 
         def worker() -> None:
             try:
                 response = self.client.observe(context) if kind == "observe" else self.client.ask(prompt, context)
-                self.results.put(("response", response))
+                self.results.put(("response", (request_id, response)))
             except ModelError as exc:
-                self.results.put(("error", str(exc)))
+                self.results.put(("error", (request_id, str(exc))))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def cancel_current(self, *, silent: bool = False) -> None:
+        had_work = self.busy or bool(self.pending)
+        self.request_serial += 1
+        self.active_request_id = self.request_serial
+        self.active_kind = ""
+        self.busy = False
+        self.pending.clear()
+        if had_work and not silent:
+            self.write("Info", "Stopped the current Buddy request and cleared queued requests.")
 
     @staticmethod
     def is_project_trigger(message: str) -> bool:
@@ -100,18 +120,21 @@ class BuddyUI:
 
     def learn_project(self) -> None:
         if self.busy:
-            self.write("Info", "Finish the current model request, then ask me to learn the project again.")
-            return
+            self.cancel_current(silent=True)
         self.busy = True
+        self.request_serial += 1
+        request_id = self.request_serial
+        self.active_request_id = request_id
+        self.active_kind = "project"
         root = self.cwd
         max_chars = max(8000, int(self.config.context_window_tokens * 4 * self.config.project_context_fraction))
         self.write("Info", f"Indexing text files under {root}...")
 
         def worker() -> None:
             try:
-                self.results.put(("project", build_project_snapshot(root, max_chars)))
+                self.results.put(("project", (request_id, build_project_snapshot(root, max_chars))))
             except (OSError, subprocess.SubprocessError) as exc:
-                self.results.put(("error", f"project indexing failed: {exc}"))
+                self.results.put(("error", (request_id, f"project indexing failed: {exc}")))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -120,6 +143,9 @@ class BuddyUI:
         self.cwd = event.get("cwd", self.cwd)
         kind = event.get("kind")
         if kind == "question":
+            if event.get("message", "").strip().lower() in {"stop", "cancel", "stop thinking"}:
+                self.cancel_current()
+                return
             self.write("You", event.get("message", ""))
             if self.is_project_trigger(event.get("message", "")):
                 self.learn_project()
@@ -133,6 +159,8 @@ class BuddyUI:
             status = event.get("status", 0)
             if command.strip().startswith("buddy "):
                 return
+            if self.busy and self.active_kind == "observe":
+                self.cancel_current(silent=True)
             self.write("Shell", f"[{status}] $ {command}")
             if self.proactive and (status != 0 or command):
                 self.request("observe")
@@ -185,8 +213,11 @@ class BuddyUI:
             return True
         if line in {"/quit", "/exit"}:
             return False
+        if line in {"/stop", "/cancel"}:
+            self.cancel_current()
+            return True
         if line == "/help":
-            self.write("Info", "Ask anything, or use /learn, /run COMMAND, /clear, /help, and /quit.")
+            self.write("Info", "Ask anything, or use /stop, /learn, /run COMMAND, /clear, /help, and /quit.")
             return True
         if line == "/clear":
             self.messages.clear()
@@ -294,11 +325,19 @@ class BuddyUI:
             try:
                 while True:
                     kind, message = self.results.get_nowait()
-                    self.busy = False
                     if kind == "response":
-                        self.handle_model_response(message)
+                        request_id, response = message
+                        if request_id != self.active_request_id:
+                            continue
+                        self.busy = False
+                        self.active_kind = ""
+                        self.handle_model_response(response)
                     elif kind == "project":
-                        snapshot: ProjectSnapshot = message
+                        request_id, snapshot = message
+                        if request_id != self.active_request_id:
+                            continue
+                        self.busy = False
+                        self.active_kind = ""
                         self.project_context = snapshot.content
                         self.project_root = snapshot.root
                         summary = (
@@ -319,7 +358,12 @@ class BuddyUI:
                             "project context for subsequent questions.",
                         )
                     else:
-                        self.write("Error", message)
+                        request_id, error = message
+                        if request_id != self.active_request_id:
+                            continue
+                        self.busy = False
+                        self.active_kind = ""
+                        self.write("Error", error)
             except queue.Empty:
                 pass
             if not self.busy and self.pending:
@@ -342,6 +386,7 @@ class BuddyUI:
                 self.input_buffer = self.input_buffer[:-1]
             elif key == "\x03":
                 self.input_buffer = ""
+                self.cancel_current()
             elif isinstance(key, str) and key.isprintable():
                 self.input_buffer += key
             time.sleep(0.08)

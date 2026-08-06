@@ -19,6 +19,7 @@ class ToolTests(unittest.TestCase):
                 "sed -i s/a/b/ file", "cat x > y", "rg --pre touch pattern", "git status --output=x",
                 "man --pager=touch ls",
                 "nvidia-smi --gpu-reset", "dmesg --clear", "journalctl --vacuum-time=1s",
+                "cat file 2>&1",
             ]:
                 with self.subTest(command=command), self.assertRaises(ToolDenied):
                     run_command(command, cwd=directory, yolo=False)

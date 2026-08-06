@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -30,7 +31,11 @@ class ToolResult:
 def _validate_read_only(argv: list[str]) -> None:
     if not argv or Path(argv[0]).name not in READ_ONLY_COMMANDS:
         raise ToolDenied("command is not on the read-only allowlist")
-    if any(token in DENIED_TOKENS or token.startswith(">") for token in argv):
+    if any(
+        token in DENIED_TOKENS or re.match(r"^\d*[<>]", token)
+        or any(operator in token for operator in ("&&", "||", ";", "`"))
+        for token in argv
+    ):
         raise ToolDenied("shell operators and redirects are disabled in read-only mode")
     command = Path(argv[0]).name
     if command == "git":

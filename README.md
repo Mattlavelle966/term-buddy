@@ -56,6 +56,7 @@ buddy why did the previous command fail?
 You can also move to the right pane and type questions there. Right-pane commands:
 
 - `/run COMMAND` runs a diagnostic command.
+- `/stop` stops the current Buddy task, clears queued questions, and discards late responses.
 - `/learn` loads the current project into model context.
 - `/clear` clears the Buddy pane.
 - `/help` displays help.
@@ -86,6 +87,12 @@ budget is full. Binary files, common secret files, private keys, VCS metadata,
 dependency directories, and ignored files are not sent to the model. The loaded
 project remains available for later questions in that Buddy session. Re-run the
 command after substantial project changes.
+
+`buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
+current task, clears queued requests, and ignores any response that arrives later.
+The model server may finish an HTTP request already in flight. Starting project
+learning also supersedes passive observation. Passive command observations never
+run tools; autonomous tools are reserved for questions you explicitly ask.
 
 Session management:
 

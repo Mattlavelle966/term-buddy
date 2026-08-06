@@ -41,3 +41,15 @@ class BuddyUiTests(unittest.TestCase):
             ):
                 ui.handle_model_response("<tool>ls</tool>")
             self.assertEqual(command.call_args.kwargs["cwd"], "/question/directory")
+
+    def test_cancel_invalidates_current_request_and_clears_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.busy = True
+            ui.active_request_id = 4
+            ui.request_serial = 4
+            ui.pending.append(("ask", "later", "/tmp"))
+            ui.cancel_current(silent=True)
+            self.assertFalse(ui.busy)
+            self.assertEqual(ui.active_request_id, 5)
+            self.assertEqual(list(ui.pending), [])

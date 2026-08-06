@@ -41,13 +41,11 @@ class ModelClient:
             raise ModelError("model returned an unexpected response") from exc
 
     def observe(self, transcript: str) -> str:
-        tools = ", ".join(sorted(READ_ONLY_COMMANDS))
         prompt = (
             "Review this latest terminal activity. Reply with one brief, useful observation "
             "or next action. If it succeeded and there is nothing meaningful to add, reply "
-            "with exactly SILENT. If you need to inspect the machine, reply with only one "
-            f"tag in the form <tool>read-only command</tool>. Available commands: {tools}. "
-            "Prefer a tool over guessing about the machine.\n\n" + transcript
+            "with exactly SILENT. This is passive observation: do not request tools and do "
+            "not begin an investigation.\n\n" + transcript
         )
         return self.complete([
             {"role": "system", "content": self.config.system_prompt},
@@ -60,7 +58,10 @@ class ModelClient:
             {"role": "system", "content": self.config.system_prompt + (
                 " When local inspection is necessary, request one command by replying only "
                 "with <tool>command</tool>. Tool availability is enforced by the host. "
-                f"Available read-only commands: {tools}. Prefer a tool over guessing."
+                f"Available read-only commands: {tools}. Prefer a tool over guessing. "
+                "Tool commands are direct argv, not shell: never use redirects, pipes, globs, "
+                "command substitution, or operators such as 2>&1. Do not repeat a failed tool "
+                "with the same path unless new evidence shows that path exists."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ])
