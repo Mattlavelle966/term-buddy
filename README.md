@@ -65,7 +65,8 @@ You can also move to the right pane and type questions there. Right-pane command
 When the model needs more evidence, it can request `<tool>...</tool>` commands.
 Term Buddy executes each through the same read-only policy (or yolo policy), shows
 the results, and lets the model continue investigating without an arbitrary command
-limit.
+limit. If a requested tool is denied, the reason and allowed alternatives are sent
+back to the model so it can recover instead of abandoning the task.
 
 Autocomplete is off by default because it performs an inference while you edit. To
 enable it, set `"autocomplete": true` in the configuration, restart the session,

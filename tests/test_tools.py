@@ -19,7 +19,7 @@ class ToolTests(unittest.TestCase):
                 "sed -i s/a/b/ file", "cat x > y", "rg --pre touch pattern", "git status --output=x",
                 "man --pager=touch ls",
                 "nvidia-smi --gpu-reset", "dmesg --clear", "journalctl --vacuum-time=1s",
-                "cat file 2>&1",
+                "cat file 2>&1", "git checkout status",
             ]:
                 with self.subTest(command=command), self.assertRaises(ToolDenied):
                     run_command(command, cwd=directory, yolo=False)
@@ -30,3 +30,10 @@ class ToolTests(unittest.TestCase):
             result = run_command(f"touch {target}", cwd=directory, yolo=True)
             self.assertEqual(result.returncode, 0)
             self.assertTrue(target.exists())
+
+    def test_git_history_inspection_commands_are_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for command in ["git show HEAD", "git diff-tree HEAD", "git ls-tree HEAD"]:
+                with self.subTest(command=command):
+                    result = run_command(command, cwd=directory, yolo=False)
+                    self.assertNotEqual(result.returncode, 127)

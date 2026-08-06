@@ -143,7 +143,8 @@ class ModelClient:
                 f"Available read-only commands: {tools}. Prefer a tool over guessing. "
                 "Tool commands are direct argv, not shell: never use redirects, pipes, globs, "
                 "command substitution, or operators such as 2>&1. Do not repeat a failed tool "
-                "with the same path unless new evidence shows that path exists."
+                "with the same path unless new evidence shows that path exists. For the latest "
+                "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout)
@@ -163,7 +164,8 @@ class ModelClient:
                 f"Available read-only commands: {tools}. Prefer a tool over guessing. "
                 "Tool commands are direct argv, not shell: never use redirects, pipes, globs, "
                 "command substitution, or operators such as 2>&1. Do not repeat a failed tool "
-                "with the same path unless new evidence shows that path exists."
+                "with the same path unless new evidence shows that path exists. For the latest "
+                "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout)

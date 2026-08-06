@@ -433,6 +433,15 @@ class BuddyUI:
                         self.active_kind = ""
                         self.write("Error", f"Buddy tool request denied: {error}")
                         append_event(self.events, "tool_denied", {"command": command, "message": error})
+                        original = self.active_question or "Review the latest terminal activity."
+                        self.request(
+                            "ask",
+                            f"Original task: {original}\n\nYour tool `{command}` was denied: {error}\n"
+                            "Continue the task using one of the allowed read-only alternatives named "
+                            "in that error. Do not repeat the denied command.",
+                            continuation=True,
+                            cwd=self.active_cwd,
+                        )
                     elif kind == "project":
                         request_id, snapshot = message
                         if request_id != self.active_request_id:

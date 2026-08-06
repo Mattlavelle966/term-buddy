@@ -18,7 +18,11 @@ READ_ONLY_COMMANDS = {
     "systemctl", "tail", "uname", "uptime", "wc", "which",
 }
 DENIED_TOKENS = {">", ">>", "<", "<<", "|", "||", "&&", ";", "&", "`"}
-GIT_READ_ONLY = {"status", "diff", "log", "show", "branch", "remote", "rev-parse", "ls-files"}
+GIT_READ_ONLY = {
+    "status", "diff", "diff-tree", "diff-index", "diff-files", "log", "show",
+    "shortlog", "blame", "branch", "remote", "rev-parse", "ls-files", "ls-tree",
+    "name-rev", "describe",
+}
 
 
 @dataclass(slots=True)
@@ -39,9 +43,25 @@ def _validate_read_only(argv: list[str]) -> None:
         raise ToolDenied("shell operators and redirects are disabled in read-only mode")
     command = Path(argv[0]).name
     if command == "git":
-        subcommand = next((arg for arg in argv[1:] if not arg.startswith("-")), "")
+        subcommand = ""
+        index = 1
+        options_with_values = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+        while index < len(argv):
+            argument = argv[index]
+            if argument in options_with_values:
+                index += 2
+                continue
+            if argument.startswith(("--git-dir=", "--work-tree=", "--namespace=", "--config-env=")):
+                index += 1
+                continue
+            if argument.startswith("-"):
+                index += 1
+                continue
+            subcommand = argument
+            break
         if subcommand not in GIT_READ_ONLY:
-            raise ToolDenied("that git subcommand is not read-only")
+            allowed = ", ".join(sorted(GIT_READ_ONLY))
+            raise ToolDenied(f"git subcommand {subcommand or '<missing>'!r} is not allowed; use one of: {allowed}")
     if command == "rg" and any(arg == "--pre" or arg.startswith("--pre=") for arg in argv):
         raise ToolDenied("rg preprocessors are disabled because they execute commands")
     if command == "man" and any(arg in {"-P", "--pager"} or arg.startswith("--pager=") for arg in argv):
