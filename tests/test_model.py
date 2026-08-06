@@ -38,3 +38,18 @@ class ModelTests(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=Response(stream)):
             chunks = list(ModelClient(Config()).stream([{"role": "user", "content": "hi"}]))
         self.assertEqual(chunks, ["hello", " world"])
+
+    def test_streaming_reports_reasoning_progress_without_returning_reasoning_text(self):
+        stream = (
+            b'data: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        activity = []
+        with patch("urllib.request.urlopen", return_value=Response(stream)):
+            chunks = list(ModelClient(Config()).stream(
+                [{"role": "user", "content": "hi"}],
+                activity_callback=lambda kind, value: activity.append((kind, value)),
+            ))
+        self.assertEqual(chunks, ["answer"])
+        self.assertEqual(activity, [("reasoning", "private thought")])

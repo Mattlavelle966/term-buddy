@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from .config import Config
 from .tools import READ_ONLY_COMMANDS
@@ -29,6 +30,19 @@ def _request_error(exc: urllib.error.URLError) -> ModelError:
 @dataclass(slots=True)
 class ModelClient:
     config: Config
+    _active_response: Any = field(default=None, init=False, repr=False)
+    _response_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def cancel(self) -> None:
+        """Close the active streaming response so compatible servers stop generation."""
+        with self._response_lock:
+            response = self._active_response
+            self._active_response = None
+        if response is not None:
+            try:
+                response.close()
+            except OSError:
+                pass
 
     def complete(
         self, messages: list[dict[str, str]], *, temperature: float = 0.2,
@@ -60,6 +74,7 @@ class ModelClient:
     def stream(
         self, messages: list[dict[str, str]], *, temperature: float = 0.2,
         timeout: int | None = None,
+        activity_callback: Callable[[str, str], None] | None = None,
     ):
         """Yield content deltas from an OpenAI-compatible SSE response."""
         url = self.config.endpoint.rstrip("/") + "/chat/completions"
@@ -72,8 +87,12 @@ class ModelClient:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         fallback = bytearray()
+        response_obj = None
         try:
             with urllib.request.urlopen(request, timeout=timeout or self.config.request_timeout) as response:
+                response_obj = response
+                with self._response_lock:
+                    self._active_response = response
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -86,15 +105,24 @@ class ModelClient:
                         return
                     try:
                         event = json.loads(data)
-                        delta = event["choices"][0].get("delta", {}).get("content")
-                        if delta:
-                            yield str(delta)
+                        choice = event["choices"][0]
+                        delta = choice.get("delta", {})
+                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                        if reasoning and activity_callback:
+                            activity_callback("reasoning", str(reasoning))
+                        content = delta.get("content") or choice.get("text")
+                        if content:
+                            yield str(content)
                     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                         continue
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             if isinstance(exc, urllib.error.URLError):
                 raise _request_error(exc) from exc
             raise ModelError(f"model request failed: {exc}") from exc
+        finally:
+            with self._response_lock:
+                if self._active_response is response_obj:
+                    self._active_response = None
         if fallback:
             try:
                 data = json.loads(fallback)
@@ -116,7 +144,7 @@ class ModelClient:
             {"role": "user", "content": prompt},
         ])
 
-    def observe_stream(self, transcript: str):
+    def observe_stream(self, transcript: str, *, activity_callback=None):
         prompt = (
             "Review this latest terminal activity. Reply with one brief, useful observation "
             "or next action. If it succeeded and there is nothing meaningful to add, reply "
@@ -126,7 +154,7 @@ class ModelClient:
         return self.stream([
             {"role": "system", "content": self.config.system_prompt},
             {"role": "user", "content": prompt},
-        ])
+        ], activity_callback=activity_callback)
 
     def ask(self, question: str, context: str) -> str:
         tools = ", ".join(sorted(READ_ONLY_COMMANDS))
@@ -149,7 +177,7 @@ class ModelClient:
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout)
 
-    def ask_stream(self, question: str, context: str):
+    def ask_stream(self, question: str, context: str, *, activity_callback=None):
         tools = ", ".join(sorted(READ_ONLY_COMMANDS))
         estimated_tokens = int(len(context) / self.config.chars_per_token_estimate)
         timeout = (
@@ -168,7 +196,7 @@ class ModelClient:
                 "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
-        ], timeout=timeout)
+        ], timeout=timeout, activity_callback=activity_callback)
 
     def suggest(self, command_buffer: str, context: str) -> str:
         answer = self.complete([

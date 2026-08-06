@@ -68,3 +68,20 @@ class BuddyUiTests(unittest.TestCase):
             self.assertFalse(ui.busy)
             self.assertEqual(ui.active_request_id, 5)
             self.assertEqual(list(ui.pending), [])
+
+    def test_new_question_interrupts_and_carries_partial_answer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(interrupt_on_new_question=True)
+            ui = BuddyUI(config, Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.busy = True
+            ui.active_kind = "ask"
+            ui.active_question = "give me a long report"
+            ui.stream_text = "partial report text"
+            ui.request_serial = 1
+            ui.active_request_id = 1
+            with patch("term_buddy.model.ModelClient.cancel"), patch("threading.Thread.start"):
+                ui.request("ask", "make it shorter")
+            self.assertTrue(ui.busy)
+            self.assertIn("partial report text", ui.active_question)
+            self.assertIn("make it shorter", ui.active_question)
+            self.assertEqual(list(ui.pending), [])

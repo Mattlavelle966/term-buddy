@@ -77,7 +77,8 @@ The Buddy header shows its current model and endpoint, approximate context-token
 usage, tool safety mode, autocomplete state, and an animated thinking indicator.
 Model output streams into the pane as it is generated. Click `[details]` in the
 status line, or press **F2**, to expand request scope, elapsed time, first-token
-latency, approximate output speed, working directory, and recent tool activity.
+latency, approximate output speed, reasoning-token progress, working directory, and
+recent tool activity. Private reasoning text is not displayed.
 The token count is a conservative source-code estimate and project snapshots retain
 headroom for system instructions, questions, tool results, and generated output.
 
@@ -104,9 +105,14 @@ Explicit questions using at least half the model context use `long_context_timeo
 
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
-The model server may finish an HTTP request already in flight. Starting project
+Term Buddy closes the streaming connection so compatible model servers also stop
+generation. Starting project
 learning also supersedes passive observation. Passive command observations never
 run tools; autonomous tools are reserved for questions you explicitly ask.
+
+With `"interrupt_on_new_question": true`, a new explicit question supersedes the
+answer currently being generated. The partial answer and original request are passed
+to the replacement request, allowing instructions such as “make that shorter.”
 
 Session management:
 
@@ -166,7 +172,8 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "context_window_tokens": 200000,
   "chars_per_token_estimate": 3.0,
   "project_context_fraction": 0.8,
-  "summarize_project_on_load": false
+  "summarize_project_on_load": false,
+  "interrupt_on_new_question": true
 }
 ```
 

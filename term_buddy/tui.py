@@ -46,6 +46,8 @@ class BuddyUI:
         self.request_started = 0.0
         self.request_context_tokens = 0
         self.first_delta_at = 0.0
+        self.reasoning_chars = 0
+        self.reasoning_started = 0.0
         self.activity_expanded = False
         self.activity_log: deque[str] = deque(maxlen=8)
 
@@ -102,7 +104,17 @@ class BuddyUI:
     ) -> None:
         request_cwd = cwd or self.cwd
         if self.busy:
-            if self.active_kind == "observe" and kind == "ask":
+            if kind == "ask" and not continuation and self.config.interrupt_on_new_question:
+                previous = self.active_question
+                partial = self.stream_text[-8000:]
+                self.cancel_current(silent=True)
+                if previous or partial:
+                    prompt = (
+                        f"Previous request: {previous}\n\nPartial answer before interruption:\n"
+                        f"{partial or '[no answer tokens yet]'}\n\nNew user instruction: {prompt}"
+                    )
+                self.write("Info", "Interrupted the previous Buddy task for the new question.")
+            elif self.active_kind == "observe" and kind == "ask":
                 self.cancel_current(silent=True)
             else:
                 if kind == "ask":
@@ -120,6 +132,8 @@ class BuddyUI:
         self.stream_text = ""
         self.request_started = time.monotonic()
         self.first_delta_at = 0.0
+        self.reasoning_chars = 0
+        self.reasoning_started = 0.0
         self.request_context_tokens = int(len(context) / self.config.chars_per_token_estimate)
         scope = "terminal" if context == self.terminal_context() else "project + terminal"
         self.activity_log.append(f"Request started: {kind}; {scope}; ~{self.request_context_tokens:,} tokens")
@@ -127,7 +141,14 @@ class BuddyUI:
         def worker() -> None:
             try:
                 chunks: list[str] = []
-                stream = self.client.observe_stream(context) if kind == "observe" else self.client.ask_stream(prompt, context)
+                def activity(event_kind: str, value: str) -> None:
+                    self.results.put(("activity", (request_id, event_kind, len(value))))
+
+                stream = (
+                    self.client.observe_stream(context, activity_callback=activity)
+                    if kind == "observe"
+                    else self.client.ask_stream(prompt, context, activity_callback=activity)
+                )
                 for delta in stream:
                     chunks.append(delta)
                     self.results.put(("delta", (request_id, delta)))
@@ -144,7 +165,10 @@ class BuddyUI:
         self.active_request_id = self.request_serial
         self.active_kind = ""
         self.busy = False
+        self.client.cancel()
         self.stream_text = ""
+        self.reasoning_chars = 0
+        self.reasoning_started = 0.0
         self.pending.clear()
         if had_work and not silent:
             self.write("Info", "Stopped the current Buddy request and cleared queued requests.")
@@ -307,7 +331,7 @@ class BuddyUI:
         self._safe_add(screen, 0, 0, f" Term Buddy | {self.config.model} @ {endpoint}", width - 1, curses.A_BOLD)
         tokens = self.estimated_tokens()
         spinner = "|/-\\"[self.spinner_frame % 4]
-        stage = "generating" if self.stream_text else "thinking"
+        stage = "generating" if self.stream_text else ("reasoning" if self.reasoning_chars else "thinking")
         state = f"{stage} {spinner}" if self.busy else "ready"
         auto = "on" if self.config.autocomplete else "off"
         status = (
@@ -321,12 +345,14 @@ class BuddyUI:
         if self.activity_expanded:
             elapsed = time.monotonic() - self.request_started if self.busy and self.request_started else 0
             generated_tokens = int(len(self.stream_text) / self.config.chars_per_token_estimate)
+            reasoning_tokens = int(self.reasoning_chars / self.config.chars_per_token_estimate)
             rate = generated_tokens / elapsed if elapsed > 0 else 0
             details = [
                 f" Activity: {self.active_kind or 'idle'} | elapsed {elapsed:.1f}s | request context ~{self.request_context_tokens:,} tokens",
-                f" Output: ~{generated_tokens:,} tokens | ~{rate:.1f} token/s | directory: {self.active_cwd}",
+                f" Output: ~{generated_tokens:,} tokens | reasoning progress: ~{reasoning_tokens:,} tokens | ~{rate:.1f} output token/s",
+                f" Directory: {self.active_cwd}",
             ]
-            details.extend(f" {line}" for line in list(self.activity_log)[-2:])
+            details.extend(f" {line}" for line in list(self.activity_log)[-1:])
             for row, line in enumerate(details, start=2):
                 self._safe_add(screen, row, 0, line, width - 1, curses.A_DIM)
             content_start = 2 + len(details)
@@ -390,7 +416,16 @@ class BuddyUI:
             try:
                 while True:
                     kind, message = self.results.get_nowait()
-                    if kind == "delta":
+                    if kind == "activity":
+                        request_id, activity_kind, size = message
+                        if request_id == self.active_request_id and activity_kind == "reasoning":
+                            if not self.reasoning_started:
+                                self.reasoning_started = time.monotonic()
+                                self.activity_log.append(
+                                    f"Reasoning stream began after {self.reasoning_started - self.request_started:.1f}s"
+                                )
+                            self.reasoning_chars += size
+                    elif kind == "delta":
                         request_id, delta = message
                         if request_id == self.active_request_id:
                             if not self.first_delta_at:
