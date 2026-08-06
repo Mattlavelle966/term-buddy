@@ -69,8 +69,19 @@ class BuddyUI:
                 )
         return "\n\n".join(chunks)[-self.config.max_output_chars:]
 
+    def conversation_context(self) -> str:
+        messages: list[str] = []
+        for event in list(self.history)[-16:]:
+            if event.get("kind") == "question":
+                messages.append(f"User: {event.get('message', '')}")
+            elif event.get("kind") == "assistant":
+                messages.append(f"Buddy: {event.get('message', '')}")
+        return "\n\n".join(messages)[-(self.config.max_output_chars * 2):]
+
     def context(self) -> str:
         terminal = self.terminal_context()
+        conversation = self.conversation_context()
+        recent = "\n\n".join(part for part in (terminal, conversation) if part)
         total_budget = max(
             8000,
             int(
@@ -79,10 +90,10 @@ class BuddyUI:
                 * self.config.project_context_fraction
             ),
         )
-        separator = "\n\nRECENT TERMINAL:\n" if self.project_context and terminal else ""
-        project_budget = max(0, total_budget - len(terminal) - len(separator))
+        separator = "\n\nRECENT TERMINAL AND CHAT:\n" if self.project_context and recent else ""
+        project_budget = max(0, total_budget - len(recent) - len(separator))
         project = self.project_context[:project_budget]
-        return project + (separator if project else "") + terminal
+        return project + (separator if project else "") + recent
 
     def estimated_tokens(self) -> int:
         return max(0, int(len(self.context()) / self.config.chars_per_token_estimate))
@@ -90,13 +101,26 @@ class BuddyUI:
     def request_context(self, kind: str, prompt: str) -> str:
         if kind == "observe":
             return self.terminal_context()
+        conversation = self.conversation_context()
+        lightweight = "\n\n".join(part for part in (self.terminal_context(), conversation) if part)
+        if self.is_rewrite_followup(prompt):
+            return lightweight
         operational = re.search(
             r"\b(git|commit|commits|branch|revision|merge|uncommitted|gpu|cpu|memory|disk|process|ports?|services?|"
             r"journal|logs?|previous command|exit code)\b",
             prompt,
             flags=re.IGNORECASE,
         )
-        return self.terminal_context() if operational else self.context()
+        return lightweight if operational else self.context()
+
+    @staticmethod
+    def is_rewrite_followup(prompt: str) -> bool:
+        return bool(re.search(
+            r"\b(shorter|summari[sz]e|condense|rewrite|rephrase|tl;?dr|previous answer|"
+            r"last answer|that answer|your answer)\b",
+            prompt,
+            flags=re.IGNORECASE,
+        ))
 
     def request(
         self, kind: str, prompt: str = "", *, continuation: bool = False,
@@ -121,6 +145,11 @@ class BuddyUI:
                     self.pending.append((kind, prompt, request_cwd))
                 return
         if kind == "ask" and not continuation:
+            if self.is_rewrite_followup(prompt):
+                prompt = (
+                    "Rewrite or summarize the previous Buddy answer as requested. Use the chat "
+                    "context, do not inspect the project again, and do not request tools.\n\n" + prompt
+                )
             self.active_question = prompt
         self.active_cwd = request_cwd
         self.request_serial += 1

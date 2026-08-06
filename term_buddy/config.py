@@ -23,6 +23,7 @@ class Config:
     context_commands: int = 12
     request_timeout: int = 90
     long_context_timeout: int = 600
+    max_response_tokens: int = 4096
     proactive: bool = True
     autocomplete: bool = False
     tools: bool = True

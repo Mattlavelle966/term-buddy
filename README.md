@@ -113,6 +113,9 @@ run tools; autonomous tools are reserved for questions you explicitly ask.
 With `"interrupt_on_new_question": true`, a new explicit question supersedes the
 answer currently being generated. The partial answer and original request are passed
 to the replacement request, allowing instructions such as “make that shorter.”
+Completed questions and answers are retained as lightweight chat context. Rewrite,
+summary, and “make that shorter” follow-ups use that chat context without resending
+the loaded project or launching tools. `max_response_tokens` bounds each generation.
 
 Session management:
 
@@ -165,6 +168,7 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "context_commands": 12,
   "request_timeout": 90,
   "long_context_timeout": 600,
+  "max_response_tokens": 4096,
   "proactive": true,
   "autocomplete": false,
   "tools": true,

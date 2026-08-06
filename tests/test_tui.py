@@ -57,6 +57,18 @@ class BuddyUiTests(unittest.TestCase):
             ui.project_context = "x" * 100000
             self.assertLessEqual(ui.estimated_tokens(), 8000)
 
+    def test_rewrite_followup_uses_chat_without_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            events = Path(directory) / "events.jsonl"
+            ui = BuddyUI(Config(), events, "test", yolo=False, proactive=True)
+            ui.project_context = "PROJECT CONTENT" * 1000
+            ui.history.append({"kind": "question", "message": "explain recent commits"})
+            ui.history.append({"kind": "assistant", "message": "a long explanation"})
+            context = ui.request_context("ask", "make your previous answer shorter")
+            self.assertIn("a long explanation", context)
+            self.assertNotIn("PROJECT CONTENT", context)
+            self.assertTrue(ui.is_rewrite_followup("summarize that answer"))
+
     def test_cancel_invalidates_current_request_and_clears_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)

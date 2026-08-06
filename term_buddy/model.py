@@ -54,6 +54,7 @@ class ModelClient:
             "messages": messages,
             "temperature": temperature,
             "stream": False,
+            "max_tokens": self.config.max_response_tokens,
         }).encode()
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
@@ -81,6 +82,7 @@ class ModelClient:
         body = json.dumps({
             "model": self.config.model, "messages": messages,
             "temperature": temperature, "stream": True,
+            "max_tokens": self.config.max_response_tokens,
         }).encode()
         headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
         if self.config.api_key:
