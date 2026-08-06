@@ -14,6 +14,18 @@ class ModelError(RuntimeError):
     pass
 
 
+def _request_error(exc: urllib.error.URLError) -> ModelError:
+    detail = str(exc)
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", errors="replace").strip()
+            if body:
+                detail += f": {body[:2000]}"
+        except OSError:
+            pass
+    return ModelError(f"model request failed: {detail}")
+
+
 @dataclass(slots=True)
 class ModelClient:
     config: Config
@@ -37,6 +49,8 @@ class ModelClient:
             with urllib.request.urlopen(request, timeout=timeout or self.config.request_timeout) as response:
                 data: dict[str, Any] = json.load(response)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            if isinstance(exc, urllib.error.URLError):
+                raise _request_error(exc) from exc
             raise ModelError(f"model request failed: {exc}") from exc
         try:
             return str(data["choices"][0]["message"]["content"]).strip()
@@ -78,6 +92,8 @@ class ModelClient:
                     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                         continue
         except (urllib.error.URLError, TimeoutError) as exc:
+            if isinstance(exc, urllib.error.URLError):
+                raise _request_error(exc) from exc
             raise ModelError(f"model request failed: {exc}") from exc
         if fallback:
             try:
@@ -114,7 +130,7 @@ class ModelClient:
 
     def ask(self, question: str, context: str) -> str:
         tools = ", ".join(sorted(READ_ONLY_COMMANDS))
-        estimated_tokens = len(context) // 4
+        estimated_tokens = int(len(context) / self.config.chars_per_token_estimate)
         timeout = (
             self.config.long_context_timeout
             if estimated_tokens >= self.config.context_window_tokens // 2
@@ -134,7 +150,7 @@ class ModelClient:
 
     def ask_stream(self, question: str, context: str):
         tools = ", ".join(sorted(READ_ONLY_COMMANDS))
-        estimated_tokens = len(context) // 4
+        estimated_tokens = int(len(context) / self.config.chars_per_token_estimate)
         timeout = (
             self.config.long_context_timeout
             if estimated_tokens >= self.config.context_window_tokens // 2

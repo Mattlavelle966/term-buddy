@@ -28,6 +28,7 @@ class Config:
     tools: bool = True
     web: bool = False
     context_window_tokens: int = 200000
+    chars_per_token_estimate: float = 3.0
     project_context_fraction: float = 0.8
     summarize_project_on_load: bool = False
     system_prompt: str = (

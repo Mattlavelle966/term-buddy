@@ -69,20 +69,27 @@ class BuddyUI:
 
     def context(self) -> str:
         terminal = self.terminal_context()
-        total_budget = max(8000, self.config.context_window_tokens * 4 - 6000)
+        total_budget = max(
+            8000,
+            int(
+                self.config.context_window_tokens
+                * self.config.chars_per_token_estimate
+                * self.config.project_context_fraction
+            ),
+        )
         separator = "\n\nRECENT TERMINAL:\n" if self.project_context and terminal else ""
         project_budget = max(0, total_budget - len(terminal) - len(separator))
         project = self.project_context[:project_budget]
         return project + (separator if project else "") + terminal
 
     def estimated_tokens(self) -> int:
-        return max(0, len(self.context()) // 4)
+        return max(0, int(len(self.context()) / self.config.chars_per_token_estimate))
 
     def request_context(self, kind: str, prompt: str) -> str:
         if kind == "observe":
             return self.terminal_context()
         operational = re.search(
-            r"\b(git diff|uncommitted|gpu|cpu|memory|disk|process|ports?|services?|"
+            r"\b(git|commit|commits|branch|revision|merge|uncommitted|gpu|cpu|memory|disk|process|ports?|services?|"
             r"journal|logs?|previous command|exit code)\b",
             prompt,
             flags=re.IGNORECASE,
@@ -113,7 +120,7 @@ class BuddyUI:
         self.stream_text = ""
         self.request_started = time.monotonic()
         self.first_delta_at = 0.0
-        self.request_context_tokens = len(context) // 4
+        self.request_context_tokens = int(len(context) / self.config.chars_per_token_estimate)
         scope = "terminal" if context == self.terminal_context() else "project + terminal"
         self.activity_log.append(f"Request started: {kind}; {scope}; ~{self.request_context_tokens:,} tokens")
 
@@ -159,7 +166,14 @@ class BuddyUI:
         self.active_request_id = request_id
         self.active_kind = "project"
         root = self.cwd
-        max_chars = max(8000, int(self.config.context_window_tokens * 4 * self.config.project_context_fraction))
+        max_chars = max(
+            8000,
+            int(
+                self.config.context_window_tokens
+                * self.config.chars_per_token_estimate
+                * self.config.project_context_fraction
+            ),
+        )
         self.write("Info", f"Indexing text files under {root}...")
 
         def worker() -> None:
@@ -306,7 +320,7 @@ class BuddyUI:
         content_start = 3
         if self.activity_expanded:
             elapsed = time.monotonic() - self.request_started if self.busy and self.request_started else 0
-            generated_tokens = len(self.stream_text) // 4
+            generated_tokens = int(len(self.stream_text) / self.config.chars_per_token_estimate)
             rate = generated_tokens / elapsed if elapsed > 0 else 0
             details = [
                 f" Activity: {self.active_kind or 'idle'} | elapsed {elapsed:.1f}s | request context ~{self.request_context_tokens:,} tokens",

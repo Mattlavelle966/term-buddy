@@ -47,6 +47,15 @@ class BuddyUiTests(unittest.TestCase):
             ui.project_context = "PROJECT CONTENT" * 100
             context = ui.request_context("ask", "what uncommitted git diff is present?")
             self.assertNotIn("PROJECT CONTENT", context)
+            context = ui.request_context("ask", "what was the last commit and its significance?")
+            self.assertNotIn("PROJECT CONTENT", context)
+
+    def test_project_context_keeps_token_headroom(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(context_window_tokens=10000, chars_per_token_estimate=3.0, project_context_fraction=0.8)
+            ui = BuddyUI(config, Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.project_context = "x" * 100000
+            self.assertLessEqual(ui.estimated_tokens(), 8000)
 
     def test_cancel_invalidates_current_request_and_clears_queue(self):
         with tempfile.TemporaryDirectory() as directory:

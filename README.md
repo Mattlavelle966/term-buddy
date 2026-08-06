@@ -77,6 +77,8 @@ usage, tool safety mode, autocomplete state, and an animated thinking indicator.
 Model output streams into the pane as it is generated. Click `[details]` in the
 status line, or press **F2**, to expand request scope, elapsed time, first-token
 latency, approximate output speed, working directory, and recent tool activity.
+The token count is a conservative source-code estimate and project snapshots retain
+headroom for system instructions, questions, tool results, and generated output.
 
 To load the current project into the session context, run this from the left shell:
 
@@ -161,6 +163,7 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "tools": true,
   "web": false,
   "context_window_tokens": 200000,
+  "chars_per_token_estimate": 3.0,
   "project_context_fraction": 0.8,
   "summarize_project_on_load": false
 }
