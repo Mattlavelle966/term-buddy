@@ -38,10 +38,14 @@ class Session:
         return self.directory / "events.jsonl"
 
     def _tmux(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        completed = subprocess.run(
             ["tmux", *args], text=True, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, check=check,
+            stderr=subprocess.PIPE,
         )
+        if check and completed.returncode:
+            detail = completed.stderr.strip() or completed.stdout.strip() or "unknown tmux error"
+            raise SessionError(f"tmux {' '.join(args[:2])} failed: {detail}")
+        return completed
 
     def exists(self) -> bool:
         if not shutil.which("tmux"):
@@ -93,16 +97,26 @@ class Session:
             f"--session {shlex.quote(self.name)}" + (" --yolo" if self.yolo else "")
             + ("" if self.proactive else " --no-watch")
         )
-        created = self._tmux("new-session", "-d", "-s", self.name, "-n", "buddy", shell_command, check=False)
+        created = self._tmux(
+            "new-session", "-d", "-P", "-F", "#{window_id} #{pane_id}",
+            "-s", self.name, "-n", "buddy", shell_command, check=False,
+        )
         if created.returncode:
             raise SessionError(created.stderr.strip() or "failed to create tmux session")
-        self._tmux("set-option", "-t", self.name, "remain-on-exit", "on")
-        self._tmux("split-window", "-h", "-l", str(self.config.buddy_width), "-t", f"{self.name}:0", buddy_command)
-        capture_command = f"exec {shlex.quote(str(launcher))} _capture --output {shlex.quote(str(transcript))}"
-        self._tmux("pipe-pane", "-o", "-t", f"{self.name}:0.0", capture_command)
-        self._tmux("select-pane", "-t", f"{self.name}:0.0")
-        self._tmux("set-option", "-t", self.name, "status-left", " #[bold]term-buddy #[default] ")
-        self._tmux("set-option", "-t", self.name, "status-right", "#{pane_current_path} ")
+        try:
+            _, left_pane = created.stdout.strip().split(maxsplit=1)
+            terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
+            buddy_width = min(self.config.buddy_width, max(20, terminal_width // 2))
+            self._tmux("set-option", "-t", self.name, "remain-on-exit", "on")
+            self._tmux("split-window", "-h", "-l", str(buddy_width), "-t", left_pane, buddy_command)
+            capture_command = f"exec {shlex.quote(str(launcher))} _capture --output {shlex.quote(str(transcript))}"
+            self._tmux("pipe-pane", "-o", "-t", left_pane, capture_command)
+            self._tmux("select-pane", "-t", left_pane)
+            self._tmux("set-option", "-t", self.name, "status-left", " #[bold]term-buddy #[default] ")
+            self._tmux("set-option", "-t", self.name, "status-right", "#{pane_current_path} ")
+        except (SessionError, ValueError) as exc:
+            self._tmux("kill-session", "-t", self.name, check=False)
+            raise SessionError(f"could not lay out Buddy panes: {exc}") from exc
 
     def attach(self) -> int:
         command = ["tmux", "attach-session", "-t", self.name]
@@ -115,9 +129,10 @@ class Session:
             self._tmux("kill-session", "-t", self.name)
 
 
-def capture_pane(session_name: str, lines: int = 160) -> str:
+def capture_pane(session_name: str, pane: str = "", lines: int = 160) -> str:
+    target = pane or session_name
     completed = subprocess.run(
-        ["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", f"{session_name}:0.0"],
+        ["tmux", "capture-pane", "-p", "-J", "-S", f"-{lines}", "-t", target],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
     return completed.stdout

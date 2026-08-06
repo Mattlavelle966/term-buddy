@@ -32,6 +32,7 @@ def parser() -> argparse.ArgumentParser:
     emit.add_argument("kind")
     emit.add_argument("--events", type=Path, required=True)
     emit.add_argument("--session", required=True)
+    emit.add_argument("--pane", default="")
     emit.add_argument("--status", type=int, default=0)
     emit.add_argument("--cwd", default="")
     emit.add_argument("--command", default="")
@@ -98,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.kind == "command_finished":
             payload["output"] = transcript_tail(args.events, config.max_output_chars)
             if not payload["output"]:
-                payload["output"] = capture_pane(args.session)[-config.max_output_chars:]
+                payload["output"] = capture_pane(args.session, args.pane)[-config.max_output_chars:]
         append_event(args.events, args.kind, payload)
         return 0
     if args.action == "suggest":
