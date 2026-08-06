@@ -80,6 +80,7 @@ class Session:
             "TERM_BUDDY_LAUNCHER": str(launcher),
             "TERM_BUDDY_YOLO": "1" if self.yolo else "0",
             "TERM_BUDDY_PROACTIVE": "1" if self.proactive else "0",
+            "TERM_BUDDY_AUTOCOMPLETE": "1" if self.config.autocomplete else "0",
             "TERM_BUDDY_ENDPOINT": self.config.endpoint,
             "TERM_BUDDY_MODEL": self.config.model,
         }

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import curses
 import os
 import queue
 import re
-import select
-import sys
 import textwrap
 import threading
 import time
@@ -27,16 +26,18 @@ class BuddyUI:
         self.client = ModelClient(config)
         self.offset = 0
         self.history: deque[dict] = deque(maxlen=config.context_commands * 3)
+        self.messages: deque[tuple[str, str]] = deque(maxlen=300)
         self.results: queue.Queue[tuple[str, str]] = queue.Queue()
         self.pending: deque[tuple[str, str]] = deque(maxlen=20)
         self.busy = False
         self.cwd = os.getcwd()
+        self.input_buffer = ""
+        self.spinner_frame = 0
+        self.active_question = ""
+        self.tool_steps = 0
 
     def write(self, label: str, message: str) -> None:
-        width = max(28, os.get_terminal_size().columns - 3)
-        color = {"Buddy": "\033[36m", "You": "\033[33m", "Tool": "\033[35m", "Error": "\033[31m"}.get(label, "\033[2m")
-        print(f"\n{color}{label}:\033[0m", flush=False)
-        print(textwrap.fill(message.strip(), width=width, replace_whitespace=False), flush=True)
+        self.messages.append((label, message.strip()))
 
     def context(self) -> str:
         chunks: list[str] = []
@@ -48,11 +49,17 @@ class BuddyUI:
                 )
         return "\n\n".join(chunks)[-self.config.max_output_chars:]
 
-    def request(self, kind: str, prompt: str = "") -> None:
+    def estimated_tokens(self) -> int:
+        return max(0, len(self.context()) // 4)
+
+    def request(self, kind: str, prompt: str = "", *, continuation: bool = False) -> None:
         if self.busy:
             if kind == "ask":
                 self.pending.append((kind, prompt))
             return
+        if kind == "ask" and not continuation:
+            self.active_question = prompt
+            self.tool_steps = 0
         self.busy = True
         context = self.context()
 
@@ -78,19 +85,22 @@ class BuddyUI:
             self.write("Shell", f"[{status}] $ {command}")
             if self.proactive and (status != 0 or command):
                 self.request("observe")
-        elif kind == "tool_result":
+        elif kind == "tool_result" and event.get("source") != "model-live":
             self.write("Tool", f"$ {event.get('command')}\n{event.get('output', '')}")
 
     def handle_model_response(self, message: str) -> None:
-        match = re.fullmatch(r"\s*<tool>(.*?)</tool>\s*", message, flags=re.DOTALL)
+        match = re.search(r"<tool>\s*(.*?)\s*</tool>", message, flags=re.DOTALL | re.IGNORECASE)
         if not match:
-            if message.upper() != "SILENT":
+            if message.strip().upper() != "SILENT":
                 self.write("Buddy", message)
                 append_event(self.events, "assistant", {"message": message})
             return
-        command = match.group(1).strip()
+        command = match.group(1).strip().strip("`")
         if not self.config.tools:
             self.write("Error", "Buddy tool requests are disabled in configuration.")
+            return
+        if self.tool_steps >= 3:
+            self.write("Error", "Buddy reached the three-command diagnostic limit.")
             return
         try:
             result = run_command(command, cwd=self.cwd, yolo=self.yolo)
@@ -98,15 +108,19 @@ class BuddyUI:
             self.write("Error", f"Buddy tool request denied: {exc}")
             append_event(self.events, "tool_denied", {"command": command, "message": str(exc)})
             return
+        self.tool_steps += 1
         self.write("Tool", f"$ {command}\n{result.output}")
         append_event(self.events, "tool_result", {
-            "command": command, "output": result.output,
-            "status": result.returncode, "cwd": self.cwd, "source": "model",
+            "command": command, "output": result.output, "status": result.returncode,
+            "cwd": self.cwd, "source": "model-live",
         })
-        self.request("ask", (
-            f"You requested `{command}`. It exited {result.returncode}. Here is its output:\n"
-            f"{result.output}\nNow answer the original debugging question concisely."
-        ))
+        original = self.active_question or "Review the latest terminal activity."
+        followup = (
+            f"Original task: {original}\n\nYou requested `{command}`. It exited "
+            f"{result.returncode}. Output:\n{result.output}\n\nAnswer the original task now, or request "
+            "one more tool if essential."
+        )
+        self.request("ask", followup, continuation=True)
 
     def handle_input(self, line: str) -> bool:
         line = line.strip()
@@ -118,7 +132,7 @@ class BuddyUI:
             self.write("Info", "Ask anything, or use /run COMMAND, /clear, /help, and /quit.")
             return True
         if line == "/clear":
-            print("\033[2J\033[H", end="", flush=True)
+            self.messages.clear()
             return True
         if line.startswith("/run "):
             if not self.config.tools:
@@ -128,7 +142,8 @@ class BuddyUI:
             try:
                 result = run_command(command, cwd=self.cwd, yolo=self.yolo)
                 append_event(self.events, "tool_result", {
-                    "command": command, "output": result.output, "status": result.returncode, "cwd": self.cwd,
+                    "command": command, "output": result.output,
+                    "status": result.returncode, "cwd": self.cwd,
                 })
             except (ToolDenied, ValueError) as exc:
                 self.write("Error", str(exc))
@@ -136,11 +151,76 @@ class BuddyUI:
         append_event(self.events, "question", {"message": line, "cwd": self.cwd, "source": "buddy-pane"})
         return True
 
-    def run(self) -> int:
-        print("\033[2J\033[H\033[1;36mTerm Buddy\033[0m")
-        mode = "YOLO read/write" if self.yolo else "read-only tools"
-        print(f"{mode} • model {self.config.model} • /help for commands")
-        print("Ask here, or run `buddy your question` in the shell. Shift-Tab completes a command.")
+    @staticmethod
+    def _safe_add(window: curses.window, row: int, col: int, value: str, width: int, attr: int = 0) -> None:
+        try:
+            window.addnstr(row, col, value, max(0, width), attr)
+        except curses.error:
+            pass
+
+    def render(self, screen: curses.window) -> None:
+        screen.erase()
+        height, width = screen.getmaxyx()
+        if height < 7 or width < 24:
+            self._safe_add(screen, 0, 0, "Term Buddy: pane too small", width - 1, curses.A_BOLD)
+            screen.refresh()
+            return
+        mode = "YOLO" if self.yolo else "READ-ONLY"
+        endpoint = self.config.endpoint.removeprefix("http://").removeprefix("https://")
+        self._safe_add(screen, 0, 0, f" Term Buddy | {self.config.model} @ {endpoint}", width - 1, curses.A_BOLD)
+        tokens = self.estimated_tokens()
+        spinner = "|/-\\"[self.spinner_frame % 4]
+        state = f"thinking {spinner}" if self.busy else "ready"
+        auto = "on" if self.config.autocomplete else "off"
+        status = (
+            f" {state} | context ~{tokens:,}/{self.config.context_window_tokens:,} tokens "
+            f"| {mode} | autocomplete {auto}"
+        )
+        self._safe_add(screen, 1, 0, status, width - 1, curses.A_DIM)
+        self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
+
+        available = height - 5
+        rendered: list[tuple[str, int]] = []
+        colors = {"Buddy": 1, "You": 2, "Tool": 3, "Error": 4, "Shell": 5, "Info": 5}
+        for label, message in self.messages:
+            prefix = f"{label}: "
+            wrapped = textwrap.wrap(
+                message, width=max(10, width - len(prefix) - 1),
+                replace_whitespace=False, drop_whitespace=True,
+            ) or [""]
+            rendered.append((prefix + wrapped[0], colors.get(label, 5)))
+            rendered.extend((" " * len(prefix) + part, colors.get(label, 5)) for part in wrapped[1:])
+            rendered.append(("", 0))
+        for row, (line, color) in enumerate(rendered[-available:], start=3):
+            attr = curses.color_pair(color) if curses.has_colors() and color else 0
+            self._safe_add(screen, row, 0, line, width - 1, attr)
+
+        prompt_row = height - 2
+        self._safe_add(screen, prompt_row - 1, 0, "─" * (width - 1), width - 1, curses.A_DIM)
+        prompt = "> " + self.input_buffer
+        self._safe_add(screen, prompt_row, 0, prompt, width - 1, curses.A_BOLD)
+        try:
+            screen.move(prompt_row, min(width - 2, len(prompt)))
+        except curses.error:
+            pass
+        screen.refresh()
+
+    def _run_curses(self, screen: curses.window) -> int:
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
+        screen.keypad(True)
+        screen.nodelay(True)
+        if curses.has_colors():
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_CYAN, -1)
+            curses.init_pair(2, curses.COLOR_YELLOW, -1)
+            curses.init_pair(3, curses.COLOR_MAGENTA, -1)
+            curses.init_pair(4, curses.COLOR_RED, -1)
+            curses.init_pair(5, curses.COLOR_WHITE, -1)
+        self.write("Info", "Ask here or use `buddy QUESTION` in the shell. /help lists commands.")
         running = True
         while running:
             events, self.offset = read_events(self.events, self.offset)
@@ -152,18 +232,34 @@ class BuddyUI:
                     self.busy = False
                     if kind == "response":
                         self.handle_model_response(message)
-                    elif kind == "error":
+                    else:
                         self.write("Error", message)
             except queue.Empty:
                 pass
             if not self.busy and self.pending:
                 pending_kind, pending_prompt = self.pending.popleft()
                 self.request(pending_kind, pending_prompt)
-            readable, _, _ = select.select([sys.stdin], [], [], 0.2)
-            if readable:
-                line = sys.stdin.readline()
-                if not line:
-                    break
+
+            self.spinner_frame += 1
+            self.render(screen)
+            try:
+                key = screen.get_wch()
+            except curses.error:
+                time.sleep(0.08)
+                continue
+            if key == curses.KEY_RESIZE:
+                continue
+            if key in ("\n", "\r"):
+                line, self.input_buffer = self.input_buffer, ""
                 running = self.handle_input(line)
-            time.sleep(0.05)
+            elif key in (curses.KEY_BACKSPACE, "\b", "\x7f"):
+                self.input_buffer = self.input_buffer[:-1]
+            elif key == "\x03":
+                self.input_buffer = ""
+            elif isinstance(key, str) and key.isprintable():
+                self.input_buffer += key
+            time.sleep(0.08)
         return 0
+
+    def run(self) -> int:
+        return curses.wrapper(self._run_curses)

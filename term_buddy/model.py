@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import Config
+from .tools import READ_ONLY_COMMANDS
 
 
 class ModelError(RuntimeError):
@@ -40,11 +41,13 @@ class ModelClient:
             raise ModelError("model returned an unexpected response") from exc
 
     def observe(self, transcript: str) -> str:
+        tools = ", ".join(sorted(READ_ONLY_COMMANDS))
         prompt = (
             "Review this latest terminal activity. Reply with one brief, useful observation "
             "or next action. If it succeeded and there is nothing meaningful to add, reply "
             "with exactly SILENT. If you need to inspect the machine, reply with only one "
-            "tag in the form <tool>read-only command</tool>.\n\n" + transcript
+            f"tag in the form <tool>read-only command</tool>. Available commands: {tools}. "
+            "Prefer a tool over guessing about the machine.\n\n" + transcript
         )
         return self.complete([
             {"role": "system", "content": self.config.system_prompt},
@@ -52,10 +55,12 @@ class ModelClient:
         ])
 
     def ask(self, question: str, context: str) -> str:
+        tools = ", ".join(sorted(READ_ONLY_COMMANDS))
         return self.complete([
             {"role": "system", "content": self.config.system_prompt + (
                 " When local inspection is necessary, request one command by replying only "
-                "with <tool>command</tool>. Tool availability is enforced by the host."
+                "with <tool>command</tool>. Tool availability is enforced by the host. "
+                f"Available read-only commands: {tools}. Prefer a tool over guessing."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ])

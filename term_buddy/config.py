@@ -23,8 +23,10 @@ class Config:
     context_commands: int = 12
     request_timeout: int = 90
     proactive: bool = True
+    autocomplete: bool = False
     tools: bool = True
     web: bool = False
+    context_window_tokens: int = 32768
     system_prompt: str = (
         "You are Term Buddy, a concise senior systems debugging partner. Observe the "
         "user's terminal activity, explain failures, spot risks, and suggest a concrete "
@@ -54,4 +56,3 @@ class Config:
         path.write_text(json.dumps(asdict(self), indent=2) + "\n", encoding="utf-8")
         os.chmod(path, 0o600)
         return path
-

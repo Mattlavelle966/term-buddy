@@ -13,7 +13,7 @@ __term_buddy_emit_prompt() {
         "$TERM_BUDDY_LAUNCHER" emit command_finished \
             --events "$TERM_BUDDY_EVENTS" --session "$TERM_BUDDY_SESSION" \
             --pane "${TMUX_PANE:-}" \
-            --status "$status" --cwd "$PWD" --command "$command" >/dev/null 2>&1 &
+            --status "$status" --cwd "$PWD" --command "$command" >/dev/null 2>&1
     fi
     __TERM_BUDDY_LAST_HIST="$hist_num"
     return "$status"
@@ -37,7 +37,9 @@ buddy() {
         --session "$TERM_BUDDY_SESSION" --pane "${TMUX_PANE:-}" --cwd "$PWD" --message "$*"
 }
 
-bind -x '"\e[Z":__term_buddy_complete' 2>/dev/null || true
+if [[ "${TERM_BUDDY_AUTOCOMPLETE:-0}" == "1" ]]; then
+    bind -x '"\e[Z":__term_buddy_complete' 2>/dev/null || true
+fi
 
 if [[ -n "${PROMPT_COMMAND:-}" ]]; then
     PROMPT_COMMAND="__term_buddy_emit_prompt;${PROMPT_COMMAND}"
@@ -46,4 +48,4 @@ else
 fi
 
 "$TERM_BUDDY_LAUNCHER" emit shell_ready --events "$TERM_BUDDY_EVENTS" \
-    --session "$TERM_BUDDY_SESSION" --pane "${TMUX_PANE:-}" --cwd "$PWD" >/dev/null 2>&1 &
+    --session "$TERM_BUDDY_SESSION" --pane "${TMUX_PANE:-}" --cwd "$PWD" >/dev/null 2>&1

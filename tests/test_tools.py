@@ -18,6 +18,7 @@ class ToolTests(unittest.TestCase):
                 "rm file", "git checkout main", "find . -delete", "awk BEGIN{system(\"touch /tmp/x\")}",
                 "sed -i s/a/b/ file", "cat x > y", "rg --pre touch pattern", "git status --output=x",
                 "man --pager=touch ls",
+                "nvidia-smi --gpu-reset", "dmesg --clear", "journalctl --vacuum-time=1s",
             ]:
                 with self.subTest(command=command), self.assertRaises(ToolDenied):
                     run_command(command, cwd=directory, yolo=False)

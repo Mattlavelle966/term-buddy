@@ -64,8 +64,13 @@ When the model needs more evidence, it can request one `<tool>...</tool>` comman
 Term Buddy executes it through the same read-only policy (or yolo policy), shows the
 result, and gives the result back to the model for its final diagnosis.
 
-While editing a command in Bash, press **Shift-Tab**. Term Buddy asks the model for a
-suffix and inserts it at the end of the current command without pressing Enter.
+Autocomplete is off by default because it performs an inference while you edit. To
+enable it, set `"autocomplete": true` in the configuration, restart the session,
+then press **Shift-Tab** while editing a command. Term Buddy inserts the returned
+suffix without pressing Enter.
+
+The Buddy header shows its current model and endpoint, approximate context-token
+usage, tool safety mode, autocomplete state, and an animated thinking indicator.
 
 Session management:
 
@@ -115,8 +120,10 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "context_commands": 12,
   "request_timeout": 90,
   "proactive": true,
+  "autocomplete": false,
   "tools": true,
-  "web": false
+  "web": false,
+  "context_window_tokens": 32768
 }
 ```
 

@@ -12,8 +12,9 @@ class ToolDenied(RuntimeError):
 
 
 READ_ONLY_COMMANDS = {
-    "cat", "df", "du", "free", "git", "head", "id", "journalctl", "ls", "lsof",
-    "man", "ps", "pwd", "rg", "stat", "tail", "uname", "uptime", "wc", "which",
+    "cat", "df", "dmesg", "du", "free", "git", "head", "id", "journalctl", "ls",
+    "lsmod", "lsof", "lspci", "man", "nvidia-smi", "ps", "pwd", "rg", "ss", "stat",
+    "systemctl", "tail", "uname", "uptime", "wc", "which",
 }
 DENIED_TOKENS = {">", ">>", "<", "<<", "|", "||", "&&", ";", "&", "`"}
 GIT_READ_ONLY = {"status", "diff", "log", "show", "branch", "remote", "rev-parse", "ls-files"}
@@ -42,6 +43,26 @@ def _validate_read_only(argv: list[str]) -> None:
         raise ToolDenied("custom man pagers are disabled because they execute commands")
     if command == "git" and any("output" in arg or arg in {"-c", "--config-env"} for arg in argv):
         raise ToolDenied("git output and configuration overrides are disabled")
+    if command == "ss" and any(arg == "-K" or "K" in arg.lstrip("-") for arg in argv if arg.startswith("-")):
+        raise ToolDenied("ss socket-kill mode is disabled")
+    if command == "systemctl":
+        subcommand = next((arg for arg in argv[1:] if not arg.startswith("-")), "status")
+        allowed = {"status", "show", "list-units", "list-unit-files", "is-active", "is-enabled", "is-failed"}
+        if subcommand not in allowed:
+            raise ToolDenied("that systemctl operation is not read-only")
+    if command == "dmesg" and any(arg in {"-c", "-C", "--clear", "--read-clear"} for arg in argv):
+        raise ToolDenied("clearing the kernel log is disabled")
+    if command == "journalctl" and any(
+        arg == "--rotate" or arg.startswith("--vacuum") or arg.startswith("--relinquish")
+        for arg in argv
+    ):
+        raise ToolDenied("journal maintenance operations are disabled")
+    if command == "nvidia-smi":
+        allowed_exact = {"-L", "--list-gpus", "-q", "--query", "-i", "--id", "-l", "--loop"}
+        allowed_prefixes = ("--query-gpu=", "--query-compute-apps=", "--format=", "--id=", "--loop=")
+        for arg in argv[1:]:
+            if arg.startswith("-") and arg not in allowed_exact and not arg.startswith(allowed_prefixes):
+                raise ToolDenied("that nvidia-smi option is not on the read-only allowlist")
 
 
 def run_command(command: str, *, cwd: str, yolo: bool, timeout: int = 20) -> ToolResult:
