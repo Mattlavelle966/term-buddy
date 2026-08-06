@@ -91,6 +91,10 @@ command after substantial project changes.
 The completion summary reports discovered and loaded files separately, files
 deferred because the context budget filled, excluded dependency/build/VCS
 directories such as `node_modules`, and binary or sensitive files skipped.
+Loading finishes without automatically asking the model to summarize the entire
+snapshot. This avoids an expensive inference before you have asked a useful
+question. Set `"summarize_project_on_load": true` if you prefer an immediate summary.
+Explicit questions using at least half the model context use `long_context_timeout`.
 
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
@@ -148,12 +152,14 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "max_output_chars": 12000,
   "context_commands": 12,
   "request_timeout": 90,
+  "long_context_timeout": 600,
   "proactive": true,
   "autocomplete": false,
   "tools": true,
   "web": false,
   "context_window_tokens": 32768,
-  "project_context_fraction": 0.8
+  "project_context_fraction": 0.8,
+  "summarize_project_on_load": false
 }
 ```
 

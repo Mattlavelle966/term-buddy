@@ -46,7 +46,7 @@ class BuddyUI:
     def write(self, label: str, message: str) -> None:
         self.messages.append((label, message.strip()))
 
-    def context(self) -> str:
+    def terminal_context(self) -> str:
         chunks: list[str] = []
         for event in list(self.history)[-self.config.context_commands:]:
             if event.get("kind") == "command_finished":
@@ -59,7 +59,10 @@ class BuddyUI:
                     f"Buddy tool: $ {event.get('command', '')}\nexit={event.get('status')}\n"
                     f"{str(event.get('output', ''))[-self.config.max_output_chars:]}"
                 )
-        terminal = "\n\n".join(chunks)[-self.config.max_output_chars:]
+        return "\n\n".join(chunks)[-self.config.max_output_chars:]
+
+    def context(self) -> str:
+        terminal = self.terminal_context()
         total_budget = max(8000, self.config.context_window_tokens * 4 - 6000)
         separator = "\n\nRECENT TERMINAL:\n" if self.project_context and terminal else ""
         project_budget = max(0, total_budget - len(terminal) - len(separator))
@@ -89,7 +92,7 @@ class BuddyUI:
         self.active_request_id = request_id
         self.active_kind = kind
         self.busy = True
-        context = self.context()
+        context = self.terminal_context() if kind == "observe" else self.context()
 
         def worker() -> None:
             try:
@@ -353,12 +356,13 @@ class BuddyUI:
                             "root": snapshot.root, "content": snapshot.content,
                             "included": snapshot.included, "discovered": snapshot.discovered,
                         })
-                        self.request(
-                            "ask",
-                            "Study the loaded project context. Summarize the architecture, purpose, "
-                            "important entry points, and anything risky or surprising. Retain this "
-                            "project context for subsequent questions.",
-                        )
+                        if self.config.summarize_project_on_load:
+                            self.request(
+                                "ask",
+                                "Study the loaded project context. Summarize the architecture, purpose, "
+                                "important entry points, and anything risky or surprising. Retain this "
+                                "project context for subsequent questions.",
+                            )
                     else:
                         request_id, error = message
                         if request_id != self.active_request_id:

@@ -18,7 +18,10 @@ class ModelError(RuntimeError):
 class ModelClient:
     config: Config
 
-    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
+    def complete(
+        self, messages: list[dict[str, str]], *, temperature: float = 0.2,
+        timeout: int | None = None,
+    ) -> str:
         url = self.config.endpoint.rstrip("/") + "/chat/completions"
         body = json.dumps({
             "model": self.config.model,
@@ -31,7 +34,7 @@ class ModelClient:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=self.config.request_timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout or self.config.request_timeout) as response:
                 data: dict[str, Any] = json.load(response)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise ModelError(f"model request failed: {exc}") from exc
@@ -54,6 +57,12 @@ class ModelClient:
 
     def ask(self, question: str, context: str) -> str:
         tools = ", ".join(sorted(READ_ONLY_COMMANDS))
+        estimated_tokens = len(context) // 4
+        timeout = (
+            self.config.long_context_timeout
+            if estimated_tokens >= self.config.context_window_tokens // 2
+            else self.config.request_timeout
+        )
         return self.complete([
             {"role": "system", "content": self.config.system_prompt + (
                 " When local inspection is necessary, request one command by replying only "
@@ -64,7 +73,7 @@ class ModelClient:
                 "with the same path unless new evidence shows that path exists."
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
-        ])
+        ], timeout=timeout)
 
     def suggest(self, command_buffer: str, context: str) -> str:
         answer = self.complete([
