@@ -9,10 +9,12 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 from .config import Config
 from .events import append_event, read_events
 from .model import ModelClient, ModelError
+from .project import ProjectSnapshot, build_project_snapshot
 from .tools import ToolDenied, run_command
 
 
@@ -27,14 +29,15 @@ class BuddyUI:
         self.offset = 0
         self.history: deque[dict] = deque(maxlen=config.context_commands * 3)
         self.messages: deque[tuple[str, str]] = deque(maxlen=300)
-        self.results: queue.Queue[tuple[str, str]] = queue.Queue()
+        self.results: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.pending: deque[tuple[str, str]] = deque(maxlen=20)
         self.busy = False
         self.cwd = os.getcwd()
         self.input_buffer = ""
         self.spinner_frame = 0
         self.active_question = ""
-        self.tool_steps = 0
+        self.project_context = ""
+        self.project_root = ""
 
     def write(self, label: str, message: str) -> None:
         self.messages.append((label, message.strip()))
@@ -47,7 +50,17 @@ class BuddyUI:
                     f"$ {event.get('command', '')}\nexit={event.get('status')} cwd={event.get('cwd')}\n"
                     f"{str(event.get('output', ''))[-self.config.max_output_chars:]}"
                 )
-        return "\n\n".join(chunks)[-self.config.max_output_chars:]
+            elif event.get("kind") == "tool_result":
+                chunks.append(
+                    f"Buddy tool: $ {event.get('command', '')}\nexit={event.get('status')}\n"
+                    f"{str(event.get('output', ''))[-self.config.max_output_chars:]}"
+                )
+        terminal = "\n\n".join(chunks)[-self.config.max_output_chars:]
+        total_budget = max(8000, self.config.context_window_tokens * 4 - 6000)
+        separator = "\n\nRECENT TERMINAL:\n" if self.project_context and terminal else ""
+        project_budget = max(0, total_budget - len(terminal) - len(separator))
+        project = self.project_context[:project_budget]
+        return project + (separator if project else "") + terminal
 
     def estimated_tokens(self) -> int:
         return max(0, len(self.context()) // 4)
@@ -59,7 +72,6 @@ class BuddyUI:
             return
         if kind == "ask" and not continuation:
             self.active_question = prompt
-            self.tool_steps = 0
         self.busy = True
         context = self.context()
 
@@ -72,13 +84,44 @@ class BuddyUI:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    @staticmethod
+    def is_project_trigger(message: str) -> bool:
+        normalized = " ".join(message.lower().strip().split())
+        return bool(re.fullmatch(
+            r"(?:please )?(?:learn|index|read|study|scan) (?:this |my |the )?project[.!]?",
+            normalized,
+        ))
+
+    def learn_project(self) -> None:
+        if self.busy:
+            self.write("Info", "Finish the current model request, then ask me to learn the project again.")
+            return
+        self.busy = True
+        root = self.cwd
+        max_chars = max(8000, int(self.config.context_window_tokens * 4 * self.config.project_context_fraction))
+        self.write("Info", f"Indexing text files under {root}...")
+
+        def worker() -> None:
+            try:
+                self.results.put(("project", build_project_snapshot(root, max_chars)))
+            except (OSError, subprocess.SubprocessError) as exc:
+                self.results.put(("error", f"project indexing failed: {exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def handle_event(self, event: dict) -> None:
         self.history.append(event)
         self.cwd = event.get("cwd", self.cwd)
         kind = event.get("kind")
         if kind == "question":
             self.write("You", event.get("message", ""))
-            self.request("ask", event.get("message", ""))
+            if self.is_project_trigger(event.get("message", "")):
+                self.learn_project()
+            else:
+                self.request("ask", event.get("message", ""))
+        elif kind == "project_context":
+            self.project_context = event.get("content", "")
+            self.project_root = event.get("root", "")
         elif kind == "command_finished":
             command = event.get("command", "")
             status = event.get("status", 0)
@@ -99,16 +142,12 @@ class BuddyUI:
         if not self.config.tools:
             self.write("Error", "Buddy tool requests are disabled in configuration.")
             return
-        if self.tool_steps >= 3:
-            self.write("Error", "Buddy reached the three-command diagnostic limit.")
-            return
         try:
             result = run_command(command, cwd=self.cwd, yolo=self.yolo)
         except (ToolDenied, ValueError) as exc:
             self.write("Error", f"Buddy tool request denied: {exc}")
             append_event(self.events, "tool_denied", {"command": command, "message": str(exc)})
             return
-        self.tool_steps += 1
         self.write("Tool", f"$ {command}\n{result.output}")
         append_event(self.events, "tool_result", {
             "command": command, "output": result.output, "status": result.returncode,
@@ -117,8 +156,8 @@ class BuddyUI:
         original = self.active_question or "Review the latest terminal activity."
         followup = (
             f"Original task: {original}\n\nYou requested `{command}`. It exited "
-            f"{result.returncode}. Output:\n{result.output}\n\nAnswer the original task now, or request "
-            "one more tool if essential."
+            f"{result.returncode}. Output:\n{result.output}\n\nContinue solving the original task. "
+            "Request another tool whenever more evidence is useful."
         )
         self.request("ask", followup, continuation=True)
 
@@ -129,10 +168,15 @@ class BuddyUI:
         if line in {"/quit", "/exit"}:
             return False
         if line == "/help":
-            self.write("Info", "Ask anything, or use /run COMMAND, /clear, /help, and /quit.")
+            self.write("Info", "Ask anything, or use /learn, /run COMMAND, /clear, /help, and /quit.")
             return True
         if line == "/clear":
             self.messages.clear()
+            return True
+        if line == "/learn":
+            append_event(self.events, "question", {
+                "message": "learn project", "cwd": self.cwd, "source": "buddy-pane",
+            })
             return True
         if line.startswith("/run "):
             if not self.config.tools:
@@ -176,6 +220,8 @@ class BuddyUI:
             f" {state} | context ~{tokens:,}/{self.config.context_window_tokens:,} tokens "
             f"| {mode} | autocomplete {auto}"
         )
+        if self.project_root:
+            status += " | project loaded"
         self._safe_add(screen, 1, 0, status, width - 1, curses.A_DIM)
         self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
 
@@ -232,6 +278,27 @@ class BuddyUI:
                     self.busy = False
                     if kind == "response":
                         self.handle_model_response(message)
+                    elif kind == "project":
+                        snapshot: ProjectSnapshot = message
+                        self.project_context = snapshot.content
+                        self.project_root = snapshot.root
+                        summary = (
+                            f"Loaded {snapshot.included}/{snapshot.discovered} text files from "
+                            f"{snapshot.root} ({len(snapshot.content):,} characters; "
+                            f"{snapshot.skipped_binary} binary and {snapshot.skipped_sensitive} sensitive skipped"
+                            + ("; context filled" if snapshot.truncated else "") + ")."
+                        )
+                        self.write("Info", summary)
+                        append_event(self.events, "project_context", {
+                            "root": snapshot.root, "content": snapshot.content,
+                            "included": snapshot.included, "discovered": snapshot.discovered,
+                        })
+                        self.request(
+                            "ask",
+                            "Study the loaded project context. Summarize the architecture, purpose, "
+                            "important entry points, and anything risky or surprising. Retain this "
+                            "project context for subsequent questions.",
+                        )
                     else:
                         self.write("Error", message)
             except queue.Empty:

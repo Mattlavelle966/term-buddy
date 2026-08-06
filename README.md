@@ -56,13 +56,15 @@ buddy why did the previous command fail?
 You can also move to the right pane and type questions there. Right-pane commands:
 
 - `/run COMMAND` runs a diagnostic command.
+- `/learn` loads the current project into model context.
 - `/clear` clears the Buddy pane.
 - `/help` displays help.
 - `/quit` closes only the Buddy process.
 
-When the model needs more evidence, it can request one `<tool>...</tool>` command.
-Term Buddy executes it through the same read-only policy (or yolo policy), shows the
-result, and gives the result back to the model for its final diagnosis.
+When the model needs more evidence, it can request `<tool>...</tool>` commands.
+Term Buddy executes each through the same read-only policy (or yolo policy), shows
+the results, and lets the model continue investigating without an arbitrary command
+limit.
 
 Autocomplete is off by default because it performs an inference while you edit. To
 enable it, set `"autocomplete": true` in the configuration, restart the session,
@@ -71,6 +73,19 @@ suffix without pressing Enter.
 
 The Buddy header shows its current model and endpoint, approximate context-token
 usage, tool safety mode, autocomplete state, and an animated thinking indicator.
+
+To load the current project into the session context, run this from the left shell:
+
+```bash
+buddy learn project
+```
+
+Term Buddy uses `rg --files` (and therefore normal ignore rules) to build a complete
+file tree, then reads text files in useful order until the configured project-context
+budget is full. Binary files, common secret files, private keys, VCS metadata,
+dependency directories, and ignored files are not sent to the model. The loaded
+project remains available for later questions in that Buddy session. Re-run the
+command after substantial project changes.
 
 Session management:
 
@@ -123,7 +138,8 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "autocomplete": false,
   "tools": true,
   "web": false,
-  "context_window_tokens": 32768
+  "context_window_tokens": 32768,
+  "project_context_fraction": 0.8
 }
 ```
 
