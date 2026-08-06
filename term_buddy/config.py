@@ -33,6 +33,8 @@ class Config:
     project_context_fraction: float = 0.8
     summarize_project_on_load: bool = False
     interrupt_on_new_question: bool = True
+    show_activity_panel: bool = True
+    activity_panel_height: int = 7
     system_prompt: str = (
         "You are Term Buddy, a concise senior systems debugging partner. Observe the "
         "user's terminal activity, explain failures, spot risks, and suggest a concrete "

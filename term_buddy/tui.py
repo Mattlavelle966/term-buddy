@@ -48,7 +48,7 @@ class BuddyUI:
         self.first_delta_at = 0.0
         self.reasoning_chars = 0
         self.reasoning_started = 0.0
-        self.activity_expanded = False
+        self.activity_expanded = config.show_activity_panel
         self.activity_log: deque[str] = deque(maxlen=8)
 
     def write(self, label: str, message: str) -> None:
@@ -190,6 +190,7 @@ class BuddyUI:
 
     def cancel_current(self, *, silent: bool = False) -> None:
         had_work = self.busy or bool(self.pending)
+        previous_kind = self.active_kind
         self.request_serial += 1
         self.active_request_id = self.request_serial
         self.active_kind = ""
@@ -199,6 +200,8 @@ class BuddyUI:
         self.reasoning_chars = 0
         self.reasoning_started = 0.0
         self.pending.clear()
+        if had_work:
+            self.activity_log.append(f"Cancelled {previous_kind or 'queued'} task")
         if had_work and not silent:
             self.write("Info", "Stopped the current Buddy request and cleared queued requests.")
 
@@ -371,23 +374,11 @@ class BuddyUI:
             status += " | project loaded"
         self._safe_add(screen, 1, 0, status, width - 1, curses.A_DIM)
         content_start = 3
+        self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
+        panel_height = 0
         if self.activity_expanded:
-            elapsed = time.monotonic() - self.request_started if self.busy and self.request_started else 0
-            generated_tokens = int(len(self.stream_text) / self.config.chars_per_token_estimate)
-            reasoning_tokens = int(self.reasoning_chars / self.config.chars_per_token_estimate)
-            rate = generated_tokens / elapsed if elapsed > 0 else 0
-            details = [
-                f" Activity: {self.active_kind or 'idle'} | elapsed {elapsed:.1f}s | request context ~{self.request_context_tokens:,} tokens",
-                f" Output: ~{generated_tokens:,} tokens | reasoning progress: ~{reasoning_tokens:,} tokens | ~{rate:.1f} output token/s",
-                f" Directory: {self.active_cwd}",
-            ]
-            details.extend(f" {line}" for line in list(self.activity_log)[-1:])
-            for row, line in enumerate(details, start=2):
-                self._safe_add(screen, row, 0, line, width - 1, curses.A_DIM)
-            content_start = 2 + len(details)
-        self._safe_add(screen, content_start - 1, 0, "─" * (width - 1), width - 1, curses.A_DIM)
-
-        available = max(1, height - content_start - 2)
+            panel_height = min(max(5, self.config.activity_panel_height), max(5, height // 3))
+        available = max(1, height - content_start - 2 - panel_height)
         rendered: list[tuple[str, int]] = []
         colors = {"Buddy": 1, "You": 2, "Tool": 3, "Error": 4, "Shell": 5, "Info": 5}
         display_messages = list(self.messages)
@@ -409,7 +400,25 @@ class BuddyUI:
             attr = curses.color_pair(color) if curses.has_colors() and color else 0
             self._safe_add(screen, row, 0, line, width - 1, attr)
 
-        prompt_row = height - 2
+        if panel_height:
+            panel_start = height - 2 - panel_height
+            elapsed = time.monotonic() - self.request_started if self.busy and self.request_started else 0
+            generated_tokens = int(len(self.stream_text) / self.config.chars_per_token_estimate)
+            reasoning_tokens = int(self.reasoning_chars / self.config.chars_per_token_estimate)
+            rate = generated_tokens / elapsed if elapsed > 0 else 0
+            task = self.active_question.replace("\n", " ") if self.active_question else "No active request"
+            details = [
+                "─ Activity trace (F2/click to collapse) " + "─" * width,
+                f" stage={self.active_kind or 'idle'}  elapsed={elapsed:.1f}s  request-context≈{self.request_context_tokens:,} tokens",
+                f" progress: reasoning≈{reasoning_tokens:,} tokens  answer≈{generated_tokens:,} tokens  output≈{rate:.1f} token/s",
+                f" cwd: {self.active_cwd}",
+                f" task: {task}",
+            ]
+            details.extend(f" · {line}" for line in list(self.activity_log)[-(panel_height - 5):])
+            for offset, line in enumerate(details[:panel_height]):
+                self._safe_add(screen, panel_start + offset, 0, line, width - 1, curses.A_DIM)
+
+        prompt_row = height - 1
         self._safe_add(screen, prompt_row - 1, 0, "─" * (width - 1), width - 1, curses.A_DIM)
         prompt = "> " + self.input_buffer
         self._safe_add(screen, prompt_row, 0, prompt, width - 1, curses.A_BOLD)
@@ -469,6 +478,9 @@ class BuddyUI:
                             continue
                         self.busy = False
                         self.active_kind = ""
+                        self.activity_log.append(
+                            f"Answer completed: ~{int(len(response) / self.config.chars_per_token_estimate):,} tokens"
+                        )
                         self.handle_model_response(response)
                         self.stream_text = ""
                     elif kind == "tool":
@@ -496,6 +508,7 @@ class BuddyUI:
                         self.busy = False
                         self.active_kind = ""
                         self.write("Error", f"Buddy tool request denied: {error}")
+                        self.activity_log.append(f"Tool denied: {command}")
                         append_event(self.events, "tool_denied", {"command": command, "message": error})
                         original = self.active_question or "Review the latest terminal activity."
                         self.request(
@@ -515,6 +528,9 @@ class BuddyUI:
                         self.stream_text = ""
                         self.project_context = snapshot.content
                         self.project_root = snapshot.root
+                        self.activity_log.append(
+                            f"Project indexed: {snapshot.included}/{snapshot.discovered} files loaded"
+                        )
                         summary = (
                             f"Loaded {snapshot.included} of {snapshot.discovered} discovered files from "
                             f"{snapshot.root} ({len(snapshot.content):,} characters; "
@@ -542,6 +558,7 @@ class BuddyUI:
                         self.busy = False
                         self.active_kind = ""
                         self.stream_text = ""
+                        self.activity_log.append(f"Request failed: {error}")
                         self.write("Error", error)
             except queue.Empty:
                 pass

@@ -75,10 +75,11 @@ suffix without pressing Enter.
 
 The Buddy header shows its current model and endpoint, approximate context-token
 usage, tool safety mode, autocomplete state, and an animated thinking indicator.
-Model output streams into the pane as it is generated. Click `[details]` in the
-status line, or press **F2**, to expand request scope, elapsed time, first-token
-latency, approximate output speed, reasoning-token progress, working directory, and
-recent tool activity. Private reasoning text is not displayed.
+Model output streams into the pane as it is generated. A bottom activity panel shows
+request scope, elapsed time, first-token latency, approximate output speed,
+reasoning-token progress, working directory, exact tool activity, retries, errors,
+and cancellation. Click `[details]` or press **F2** to collapse or expand it. Private
+chain-of-thought text is not displayed.
 The token count is a conservative source-code estimate and project snapshots retain
 headroom for system instructions, questions, tool results, and generated output.
 
@@ -177,7 +178,9 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "chars_per_token_estimate": 3.0,
   "project_context_fraction": 0.8,
   "summarize_project_on_load": false,
-  "interrupt_on_new_question": true
+  "interrupt_on_new_question": true,
+  "show_activity_panel": true,
+  "activity_panel_height": 7
 }
 ```
 
