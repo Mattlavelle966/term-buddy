@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=67"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "term-buddy"
+version = "0.1.0"
+description = "A local-AI debugging companion for tmux terminals"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "term-buddy contributors"}]
+dependencies = []
+
+[project.scripts]
+term-buddy = "term_buddy.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["term_buddy*"]
+
+[tool.setuptools.package-data]
+term_buddy = ["shell/*.bash"]

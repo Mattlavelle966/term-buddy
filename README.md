@@ -1,0 +1,167 @@
+# term-buddy
+
+Term Buddy opens a tmux workspace with your Bash shell on the left and a local-AI
+debugging companion on the right. It observes completed commands and their output,
+comments when useful, answers questions, completes command lines, and can run bounded
+diagnostic commands of its own.
+
+It is designed for Linux servers: the runtime has no third-party Python packages,
+model traffic goes to the endpoint you configure, and session data is kept in a
+private directory under `$XDG_RUNTIME_DIR` or `/tmp/term-buddy-$UID`.
+
+## Requirements
+
+- Linux or another Unix-like system
+- Python 3.10+
+- tmux
+- Bash
+- An OpenAI-compatible chat-completions API (defaults to
+  `http://127.0.0.1:8080/v1`)
+
+On Debian or Ubuntu:
+
+```bash
+sudo apt install tmux python3
+```
+
+## Install
+
+From a clone:
+
+```bash
+./install.sh
+```
+
+For development, no installation is needed:
+
+```bash
+./bin/term-buddy
+```
+
+## Quick start
+
+Start the default session:
+
+```bash
+term-buddy
+```
+
+Use the left pane normally. Your existing tmux configuration and pane-navigation
+bindings remain active. In the left shell, ask a direct question with:
+
+```bash
+buddy why did the previous command fail?
+```
+
+You can also move to the right pane and type questions there. Right-pane commands:
+
+- `/run COMMAND` runs a diagnostic command.
+- `/clear` clears the Buddy pane.
+- `/help` displays help.
+- `/quit` closes only the Buddy process.
+
+When the model needs more evidence, it can request one `<tool>...</tool>` command.
+Term Buddy executes it through the same read-only policy (or yolo policy), shows the
+result, and gives the result back to the model for its final diagnosis.
+
+While editing a command in Bash, press **Shift-Tab**. Term Buddy asks the model for a
+suffix and inserts it at the end of the current command without pressing Enter.
+
+Session management:
+
+```bash
+term-buddy attach
+term-buddy stop
+term-buddy --session incident-42
+term-buddy --no-watch
+```
+
+## Read-only and yolo modes
+
+By default, `/run` directly executes only an allowlist of inspection commands, with
+no shell expansion, pipelines, redirects, or mutating Git/find/sed operations. This
+is a safety boundary for the tool runner, not an operating-system sandbox. The model
+can still read information those commands expose with your account's permissions.
+
+To allow arbitrary executable commands:
+
+```bash
+term-buddy --yolo
+```
+
+Yolo mode bypasses the read-only allowlist. Use it only on hosts and inside working
+directories where you accept the risk of model-suggested or manually entered writes.
+Term Buddy never grants privileges beyond the user that launched it.
+
+## Configuration
+
+Generate the default private config:
+
+```bash
+term-buddy config
+```
+
+It is written to `~/.config/term-buddy/config.json`. Common settings:
+
+```json
+{
+  "endpoint": "http://127.0.0.1:8080/v1",
+  "model": "ornith",
+  "api_key": "",
+  "shell": "/bin/bash",
+  "session_name": "term-buddy",
+  "buddy_width": 42,
+  "max_output_chars": 12000,
+  "context_commands": 12,
+  "request_timeout": 90,
+  "proactive": true,
+  "tools": true,
+  "web": false
+}
+```
+
+Environment variables override the corresponding file values:
+
+```bash
+export TERM_BUDDY_ENDPOINT=http://127.0.0.1:8080/v1
+export TERM_BUDDY_MODEL=ornith
+export TERM_BUDDY_API_KEY=optional-secret
+```
+
+The endpoint and model can also be selected for a launch:
+
+```bash
+term-buddy --endpoint http://127.0.0.1:8080/v1 --model ornith
+```
+
+Global options must appear before subcommands, for example
+`term-buddy --session incident attach`.
+
+## Server notes
+
+- Run the model on loopback, or protect a remotely bound endpoint with TLS and
+  authentication.
+- Terminal output can contain credentials. It is sent to the configured model and
+  retained for the life of the local runtime session.
+- Term Buddy keeps the complete raw pane stream in a private runtime
+  `transcript.log` so reattached sessions retain their history. Only a bounded tail
+  is sent with each model request. Long-running, high-output sessions can therefore
+  consume disk space; stop the session and remove its runtime directory when the
+  incident is finished.
+- Commands that redraw the full terminal, nested tmux sessions, password prompts,
+  and remote interactive SSH programs are not interpreted reliably. Proactive
+  comments concern completed shell commands only.
+- One Buddy session maps to one tmux session. Use `--session NAME` for parallel
+  incidents.
+
+## Development
+
+Run the dependency-free test suite:
+
+```bash
+python3 -m unittest discover -v
+```
+
+## License
+
+MIT
