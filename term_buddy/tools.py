@@ -42,6 +42,8 @@ def _validate_read_only(argv: list[str]) -> None:
     ):
         raise ToolDenied("shell operators and redirects are disabled in read-only mode")
     command = Path(argv[0]).name
+    if command in {"cat", "head", "tail", "wc", "stat", "rg"} and len(argv) < 2:
+        raise ToolDenied(f"{command} requires an explicit file or search argument")
     if command == "git":
         subcommand = ""
         index = 1
@@ -103,7 +105,8 @@ def run_command(command: str, *, cwd: str, yolo: bool, timeout: int = 20) -> Too
         environment["MANPAGER"] = "cat"
         completed = subprocess.run(
             argv, cwd=safe_cwd, text=True, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, timeout=timeout, env=environment,
+            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            timeout=timeout, env=environment,
         )
         output = completed.stdout[-16000:]
         return ToolResult(command=command, output=output, returncode=completed.returncode)

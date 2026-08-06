@@ -20,6 +20,7 @@ class ToolTests(unittest.TestCase):
                 "man --pager=touch ls",
                 "nvidia-smi --gpu-reset", "dmesg --clear", "journalctl --vacuum-time=1s",
                 "cat file 2>&1", "git checkout status",
+                "cat",
             ]:
                 with self.subTest(command=command), self.assertRaises(ToolDenied):
                     run_command(command, cwd=directory, yolo=False)

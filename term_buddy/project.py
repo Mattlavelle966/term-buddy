@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -119,3 +120,40 @@ def build_project_snapshot(root_value: str, max_chars: int) -> ProjectSnapshot:
         deferred=max(0, len(paths) - included - skipped_binary - skipped_sensitive),
         truncated=truncated,
     )
+
+
+def select_project_context(snapshot: str, question: str, max_chars: int) -> str:
+    """Select relevant file blocks while retaining the project tree and key manifests."""
+    if len(snapshot) <= max_chars:
+        return snapshot
+    marker = "\n\nCONTENTS:"
+    tree, _separator, contents = snapshot.partition(marker)
+    tree_budget = min(len(tree), max_chars // 4)
+    selected = [tree[:tree_budget], marker]
+    used = sum(len(part) for part in selected)
+    words = {
+        word for word in re.findall(r"[a-zA-Z0-9_.-]{3,}", question.lower())
+        if word not in {"what", "this", "that", "does", "should", "could", "would", "project", "about", "tell"}
+    }
+    blocks: list[tuple[int, str]] = []
+    for match in re.finditer(
+        r"\n\n--- FILE: (.*?) ---\n(.*?)(?=\n\n--- FILE: |\Z)",
+        contents,
+        flags=re.DOTALL,
+    ):
+        path, body = match.group(1), match.group(2)
+        lower_path = path.lower()
+        lower_body = body.lower()
+        name = Path(path).name.lower()
+        score = 100 if name in PRIORITY_NAMES or name.startswith("readme") else 0
+        for word in words:
+            score += 30 if word in lower_path else min(10, lower_body.count(word))
+        blocks.append((score, f"\n\n--- FILE: {path} ---\n{body}"))
+    blocks.sort(key=lambda item: (item[0], -len(item[1])), reverse=True)
+    for _score, block in blocks:
+        remaining = max_chars - used
+        if remaining < 256:
+            break
+        selected.append(block[:remaining])
+        used += min(len(block), remaining)
+    return "".join(selected)[:max_chars]

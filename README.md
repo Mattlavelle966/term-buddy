@@ -92,10 +92,17 @@ buddy learn project
 ```
 
 Loading makes the snapshot available but does not attach it to normal questions.
-Explicitly opt into the large snapshot only when it is useful:
+`/proj` selects a focused slice of relevant files from the learned snapshot:
 
 ```bash
 buddy /proj what should I change in ScrapForm.vue to make it green?
+```
+
+Use the full learned snapshot only when you deliberately accept a potentially long
+prompt-prefill delay:
+
+```bash
+buddy /proj-full give me a comprehensive architecture review
 ```
 
 Normal questions remain lightweight, even after learning a project:
@@ -202,7 +209,8 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "interrupt_on_new_question": true,
   "show_activity_panel": true,
   "activity_panel_height": 7,
-  "optimize_operational_project_questions": true
+  "optimize_operational_project_questions": true,
+  "project_query_tokens": 24000
 }
 ```
 

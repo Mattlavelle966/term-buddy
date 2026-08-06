@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from term_buddy.project import build_project_snapshot
+from term_buddy.project import build_project_snapshot, select_project_context
 
 
 class ProjectTests(unittest.TestCase):
@@ -31,3 +31,13 @@ class ProjectTests(unittest.TestCase):
             snapshot = build_project_snapshot(directory, 8000)
             self.assertLessEqual(len(snapshot.content), 8000)
             self.assertTrue(snapshot.truncated)
+
+    def test_focused_context_prefers_matching_file(self):
+        snapshot = (
+            "PROJECT ROOT: /tmp/example\n\nFILES:\napp/Foo.vue\napp/ScrapForm.vue"
+            "\n\nCONTENTS:\n\n--- FILE: app/Foo.vue ---\n" + ("unrelated\n" * 100) + "\n"
+            "--- FILE: app/ScrapForm.vue ---\nconst formColor = 'blue';"
+        )
+        selected = select_project_context(snapshot, "make ScrapForm green", 600)
+        self.assertIn("ScrapForm.vue", selected)
+        self.assertIn("formColor", selected)

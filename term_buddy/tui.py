@@ -14,7 +14,7 @@ from typing import Any
 from .config import Config
 from .events import append_event, read_events
 from .model import ModelClient, ModelError
-from .project import build_project_snapshot
+from .project import build_project_snapshot, select_project_context
 from .tools import ToolDenied, run_command
 
 
@@ -30,7 +30,7 @@ class BuddyUI:
         self.history: deque[dict] = deque(maxlen=config.context_commands * 3)
         self.messages: deque[tuple[str, str]] = deque(maxlen=300)
         self.results: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self.pending: deque[tuple[str, str, str, bool]] = deque(maxlen=20)
+        self.pending: deque[tuple[str, str, str, str]] = deque(maxlen=20)
         self.busy = False
         self.active_kind = ""
         self.request_serial = 0
@@ -39,7 +39,7 @@ class BuddyUI:
         self.input_buffer = ""
         self.spinner_frame = 0
         self.active_question = ""
-        self.active_project_mode = False
+        self.active_project_mode = "none"
         self.active_cwd = self.cwd
         self.project_context = ""
         self.project_root = ""
@@ -101,12 +101,21 @@ class BuddyUI:
     def estimated_tokens(self) -> int:
         return max(0, int(len(self.context()) / self.config.chars_per_token_estimate))
 
-    def request_context(self, kind: str, prompt: str, *, project_mode: bool = False) -> str:
+    def request_context(self, kind: str, prompt: str, *, project_mode: str = "none") -> str:
         if kind == "observe":
             return self.terminal_context()
         conversation = self.conversation_context()
         lightweight = "\n\n".join(part for part in (self.terminal_context(), conversation) if part)
-        return self.context() if project_mode else lightweight
+        if project_mode == "full":
+            return self.context()
+        if project_mode == "project":
+            selected = select_project_context(
+                self.project_context,
+                prompt,
+                int(self.config.project_query_tokens * self.config.chars_per_token_estimate),
+            )
+            return "\n\n".join(part for part in (selected, lightweight) if part)
+        return lightweight
 
     @staticmethod
     def is_rewrite_followup(prompt: str) -> bool:
@@ -128,10 +137,13 @@ class BuddyUI:
 
     def request(
         self, kind: str, prompt: str = "", *, continuation: bool = False,
-        cwd: str | None = None, project_mode: bool | None = None,
+        cwd: str | None = None, project_mode: str | None = None,
     ) -> None:
         request_cwd = cwd or self.cwd
-        requested_project_mode = self.active_project_mode if continuation else bool(project_mode)
+        requested_project_mode = (
+            self.active_project_mode if continuation and project_mode is None
+            else project_mode or "none"
+        )
         rewrite_followup = self.is_rewrite_followup(prompt)
         if self.busy:
             if self.active_kind == "observe" and kind == "ask":
@@ -173,7 +185,11 @@ class BuddyUI:
         self.reasoning_started = 0.0
         self.server_connected = False
         self.request_context_tokens = int(len(context) / self.config.chars_per_token_estimate)
-        scope = "project + terminal" if requested_project_mode else "lightweight terminal + chat"
+        scope = {
+            "full": "full project + terminal",
+            "project": "focused project + terminal",
+            "none": "lightweight terminal + chat",
+        }[requested_project_mode]
         self.activity_log.append(f"Request started: {kind}; {scope}; ~{self.request_context_tokens:,} tokens")
 
         def worker() -> None:
@@ -266,17 +282,17 @@ class BuddyUI:
                 self.learn_project()
             else:
                 project_mode, message = self.parse_question_mode(raw_message)
-                if project_mode and not self.project_context:
+                if project_mode != "none" and not self.project_context:
                     self.write("Error", "No project is loaded. Run `buddy learn project` first.")
                     return
-                if project_mode and not message:
-                    self.write("Error", "Usage: buddy /proj QUESTION")
+                if project_mode != "none" and not message:
+                    self.write("Error", "Usage: buddy /proj QUESTION or buddy /proj-full QUESTION")
                     return
                 if (
-                    project_mode and self.config.optimize_operational_project_questions
+                    project_mode != "none" and self.config.optimize_operational_project_questions
                     and self.is_operational_question(message)
                 ):
-                    project_mode = False
+                    project_mode = "none"
                     self.write(
                         "Info",
                         "Using lightweight context: this is an operational/Git question, so targeted "
@@ -355,11 +371,14 @@ class BuddyUI:
                 self.project_root = event.get("root", "")
 
     @staticmethod
-    def parse_question_mode(message: str) -> tuple[bool, str]:
+    def parse_question_mode(message: str) -> tuple[str, str]:
+        full = re.match(r"^/(?:proj|project)-full(?:\s+|$)", message.strip(), flags=re.IGNORECASE)
+        if full:
+            return "full", message.strip()[full.end():].strip()
         match = re.match(r"^/(?:proj|project)(?:\s+|$)", message.strip(), flags=re.IGNORECASE)
         if not match:
-            return False, message.strip()
-        return True, message.strip()[match.end():].strip()
+            return "none", message.strip()
+        return "project", message.strip()[match.end():].strip()
 
     def handle_input(self, line: str) -> bool:
         line = line.strip()
@@ -373,7 +392,8 @@ class BuddyUI:
         if line == "/help":
             self.write(
                 "Info",
-                "Ask anything, use /proj QUESTION for loaded project context, or use /stop, "
+                "Ask anything, use /proj QUESTION for focused project context, /proj-full QUESTION "
+                "for the complete loaded snapshot, or use /stop, "
                 "/learn, /run COMMAND, /clear, /help, and /quit.",
             )
             return True
@@ -577,7 +597,10 @@ class BuddyUI:
                             f"{result.returncode}. Output:\n{result.output}\n\nContinue solving the original task. "
                             "Request another tool whenever more evidence is useful."
                         )
-                        self.request("ask", followup, continuation=True, cwd=cwd)
+                        self.request(
+                            "ask", followup, continuation=True, cwd=cwd,
+                            project_mode="none",
+                        )
                     elif kind == "tool_error":
                         request_id, command, error = message
                         if request_id != self.active_request_id:
@@ -595,6 +618,7 @@ class BuddyUI:
                             "in that error. Do not repeat the denied command.",
                             continuation=True,
                             cwd=self.active_cwd,
+                            project_mode="none",
                         )
                     elif kind == "project":
                         request_id, snapshot = message
@@ -627,7 +651,7 @@ class BuddyUI:
                                 "Study the loaded project context. Summarize the architecture, purpose, "
                                 "important entry points, and anything risky or surprising. Retain this "
                                 "project context for subsequent questions.",
-                                project_mode=True,
+                                project_mode="full",
                             )
                     else:
                         request_id, error = message

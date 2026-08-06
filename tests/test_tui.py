@@ -57,11 +57,15 @@ class BuddyUiTests(unittest.TestCase):
             self.assertNotIn("PROJECT CONTENT", ui.request_context("ask", "change ScrapForm.vue"))
             self.assertIn(
                 "PROJECT CONTENT",
-                ui.request_context("ask", "change ScrapForm.vue", project_mode=True),
+                ui.request_context("ask", "change ScrapForm.vue", project_mode="full"),
             )
             self.assertEqual(
                 ui.parse_question_mode("/proj make ScrapForm green"),
-                (True, "make ScrapForm green"),
+                ("project", "make ScrapForm green"),
+            )
+            self.assertEqual(
+                ui.parse_question_mode("/proj-full inspect everything"),
+                ("full", "inspect everything"),
             )
             self.assertTrue(ui.is_operational_question("tell me about the last 2 commits"))
             self.assertFalse(ui.is_operational_question("make ScrapForm green"))
@@ -96,7 +100,7 @@ class BuddyUiTests(unittest.TestCase):
             ui.busy = True
             ui.active_request_id = 4
             ui.request_serial = 4
-            ui.pending.append(("ask", "later", "/tmp", False))
+            ui.pending.append(("ask", "later", "/tmp", "none"))
             ui.cancel_current(silent=True)
             self.assertFalse(ui.busy)
             self.assertEqual(ui.active_request_id, 5)
