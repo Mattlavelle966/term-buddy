@@ -341,9 +341,11 @@ class BuddyUI:
                         self.project_context = snapshot.content
                         self.project_root = snapshot.root
                         summary = (
-                            f"Loaded {snapshot.included}/{snapshot.discovered} text files from "
+                            f"Loaded {snapshot.included} of {snapshot.discovered} discovered files from "
                             f"{snapshot.root} ({len(snapshot.content):,} characters; "
-                            f"{snapshot.skipped_binary} binary and {snapshot.skipped_sensitive} sensitive skipped"
+                            f"{snapshot.deferred} deferred by context budget; {snapshot.excluded_directories} "
+                            f"dependency/build/VCS directories excluded; {snapshot.skipped_binary} binary and "
+                            f"{snapshot.skipped_sensitive} sensitive files skipped"
                             + ("; context filled" if snapshot.truncated else "") + ")."
                         )
                         self.write("Info", summary)

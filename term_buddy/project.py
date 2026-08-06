@@ -15,6 +15,9 @@ PRIORITY_NAMES = {
     "readme", "readme.md", "pyproject.toml", "package.json", "cargo.toml",
     "go.mod", "makefile", "dockerfile", "compose.yaml", "docker-compose.yml",
 }
+EXCLUDED_DIRECTORIES = {
+    ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "dist", "build", "__pycache__",
+}
 
 
 @dataclass(slots=True)
@@ -25,23 +28,36 @@ class ProjectSnapshot:
     included: int
     skipped_binary: int
     skipped_sensitive: int
+    excluded_directories: int
+    deferred: int
     truncated: bool
 
 
 def _files(root: Path) -> list[Path]:
     if shutil.which("rg"):
+        command = ["rg", "--files", "-0"]
+        for directory in sorted(EXCLUDED_DIRECTORIES):
+            command.extend(["-g", f"!{directory}/**", "-g", f"!**/{directory}/**"])
         result = subprocess.run(
-            ["rg", "--files", "-0"], cwd=root, stdout=subprocess.PIPE,
+            command, cwd=root, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, timeout=30,
         )
         if result.returncode in {0, 1}:
             return [root / os.fsdecode(item) for item in result.stdout.split(b"\0") if item]
     found: list[Path] = []
-    ignored = {".git", ".hg", ".svn", "node_modules", ".venv", "venv", "dist", "build", "__pycache__"}
     for directory, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in ignored and not name.startswith(".")]
+        dirnames[:] = [name for name in dirnames if name not in EXCLUDED_DIRECTORIES and not name.startswith(".")]
         found.extend(Path(directory) / name for name in filenames if not name.startswith("."))
     return found
+
+
+def _count_excluded_directories(root: Path) -> int:
+    count = 0
+    for _directory, dirnames, _filenames in os.walk(root):
+        excluded = [name for name in dirnames if name in EXCLUDED_DIRECTORIES]
+        count += len(excluded)
+        dirnames[:] = [name for name in dirnames if name not in EXCLUDED_DIRECTORIES]
+    return count
 
 
 def _priority(path: Path, root: Path) -> tuple[int, int, str]:
@@ -98,5 +114,8 @@ def build_project_snapshot(root_value: str, max_chars: int) -> ProjectSnapshot:
     return ProjectSnapshot(
         root=str(root), content="".join(parts)[:max_chars], discovered=len(paths),
         included=included, skipped_binary=skipped_binary,
-        skipped_sensitive=skipped_sensitive, truncated=truncated,
+        skipped_sensitive=skipped_sensitive,
+        excluded_directories=_count_excluded_directories(root),
+        deferred=max(0, len(paths) - included - skipped_binary - skipped_sensitive),
+        truncated=truncated,
     )

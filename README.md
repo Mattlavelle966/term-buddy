@@ -88,6 +88,10 @@ dependency directories, and ignored files are not sent to the model. The loaded
 project remains available for later questions in that Buddy session. Re-run the
 command after substantial project changes.
 
+The completion summary reports discovered and loaded files separately, files
+deferred because the context budget filled, excluded dependency/build/VCS
+directories such as `node_modules`, and binary or sensitive files skipped.
+
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
 The model server may finish an HTTP request already in flight. Starting project
