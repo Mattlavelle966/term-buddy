@@ -35,12 +35,18 @@ class BuddyUiTests(unittest.TestCase):
             ui = BuddyUI(Config(), events, "test", yolo=False, proactive=True)
             ui.active_cwd = "/question/directory"
             ui.active_question = "inspect this directory"
-            with (
-                patch("term_buddy.tui.run_command", return_value=ToolResult("ls", "ok", 0)) as command,
-                patch.object(ui, "request"),
-            ):
+            with patch("term_buddy.tui.run_command", return_value=ToolResult("ls", "ok", 0)) as command:
                 ui.handle_model_response("<tool>ls</tool>")
+                kind, _payload = ui.results.get(timeout=1)
+            self.assertEqual(kind, "tool")
             self.assertEqual(command.call_args.kwargs["cwd"], "/question/directory")
+
+    def test_operational_question_omits_loaded_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.project_context = "PROJECT CONTENT" * 100
+            context = ui.request_context("ask", "what uncommitted git diff is present?")
+            self.assertNotIn("PROJECT CONTENT", context)
 
     def test_cancel_invalidates_current_request_and_clears_queue(self):
         with tempfile.TemporaryDirectory() as directory:

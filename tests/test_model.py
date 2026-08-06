@@ -28,3 +28,13 @@ class ModelTests(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=Response(json.dumps(payload).encode())) as request:
             ModelClient(config).ask("question", "x" * 240)
         self.assertEqual(request.call_args.kwargs["timeout"], 321)
+
+    def test_streaming_sse_yields_content_deltas(self):
+        stream = (
+            b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":" world"}}]}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        with patch("urllib.request.urlopen", return_value=Response(stream)):
+            chunks = list(ModelClient(Config()).stream([{"role": "user", "content": "hi"}]))
+        self.assertEqual(chunks, ["hello", " world"])

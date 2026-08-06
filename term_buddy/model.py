@@ -43,6 +43,51 @@ class ModelClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelError("model returned an unexpected response") from exc
 
+    def stream(
+        self, messages: list[dict[str, str]], *, temperature: float = 0.2,
+        timeout: int | None = None,
+    ):
+        """Yield content deltas from an OpenAI-compatible SSE response."""
+        url = self.config.endpoint.rstrip("/") + "/chat/completions"
+        body = json.dumps({
+            "model": self.config.model, "messages": messages,
+            "temperature": temperature, "stream": True,
+        }).encode()
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        fallback = bytearray()
+        try:
+            with urllib.request.urlopen(request, timeout=timeout or self.config.request_timeout) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    if not line.startswith("data:"):
+                        fallback.extend(raw_line)
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        event = json.loads(data)
+                        delta = event["choices"][0].get("delta", {}).get("content")
+                        if delta:
+                            yield str(delta)
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                        continue
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise ModelError(f"model request failed: {exc}") from exc
+        if fallback:
+            try:
+                data = json.loads(fallback)
+                content = data["choices"][0]["message"]["content"]
+                if content:
+                    yield str(content)
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+                raise ModelError("model returned an unexpected streaming response") from exc
+
     def observe(self, transcript: str) -> str:
         prompt = (
             "Review this latest terminal activity. Reply with one brief, useful observation "
@@ -51,6 +96,18 @@ class ModelClient:
             "not begin an investigation.\n\n" + transcript
         )
         return self.complete([
+            {"role": "system", "content": self.config.system_prompt},
+            {"role": "user", "content": prompt},
+        ])
+
+    def observe_stream(self, transcript: str):
+        prompt = (
+            "Review this latest terminal activity. Reply with one brief, useful observation "
+            "or next action. If it succeeded and there is nothing meaningful to add, reply "
+            "with exactly SILENT. This is passive observation: do not request tools and do "
+            "not begin an investigation.\n\n" + transcript
+        )
+        return self.stream([
             {"role": "system", "content": self.config.system_prompt},
             {"role": "user", "content": prompt},
         ])
@@ -64,6 +121,26 @@ class ModelClient:
             else self.config.request_timeout
         )
         return self.complete([
+            {"role": "system", "content": self.config.system_prompt + (
+                " When local inspection is necessary, request one command by replying only "
+                "with <tool>command</tool>. Tool availability is enforced by the host. "
+                f"Available read-only commands: {tools}. Prefer a tool over guessing. "
+                "Tool commands are direct argv, not shell: never use redirects, pipes, globs, "
+                "command substitution, or operators such as 2>&1. Do not repeat a failed tool "
+                "with the same path unless new evidence shows that path exists."
+            )},
+            {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
+        ], timeout=timeout)
+
+    def ask_stream(self, question: str, context: str):
+        tools = ", ".join(sorted(READ_ONLY_COMMANDS))
+        estimated_tokens = len(context) // 4
+        timeout = (
+            self.config.long_context_timeout
+            if estimated_tokens >= self.config.context_window_tokens // 2
+            else self.config.request_timeout
+        )
+        return self.stream([
             {"role": "system", "content": self.config.system_prompt + (
                 " When local inspection is necessary, request one command by replying only "
                 "with <tool>command</tool>. Tool availability is enforced by the host. "

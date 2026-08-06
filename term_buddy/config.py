@@ -27,7 +27,7 @@ class Config:
     autocomplete: bool = False
     tools: bool = True
     web: bool = False
-    context_window_tokens: int = 32768
+    context_window_tokens: int = 200000
     project_context_fraction: float = 0.8
     summarize_project_on_load: bool = False
     system_prompt: str = (

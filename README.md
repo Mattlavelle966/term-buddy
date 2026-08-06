@@ -74,6 +74,9 @@ suffix without pressing Enter.
 
 The Buddy header shows its current model and endpoint, approximate context-token
 usage, tool safety mode, autocomplete state, and an animated thinking indicator.
+Model output streams into the pane as it is generated. Click `[details]` in the
+status line, or press **F2**, to expand request scope, elapsed time, first-token
+latency, approximate output speed, working directory, and recent tool activity.
 
 To load the current project into the session context, run this from the left shell:
 
@@ -157,7 +160,7 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "autocomplete": false,
   "tools": true,
   "web": false,
-  "context_window_tokens": 32768,
+  "context_window_tokens": 200000,
   "project_context_fraction": 0.8,
   "summarize_project_on_load": false
 }

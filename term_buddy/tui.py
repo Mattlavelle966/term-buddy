@@ -42,6 +42,12 @@ class BuddyUI:
         self.active_cwd = self.cwd
         self.project_context = ""
         self.project_root = ""
+        self.stream_text = ""
+        self.request_started = 0.0
+        self.request_context_tokens = 0
+        self.first_delta_at = 0.0
+        self.activity_expanded = False
+        self.activity_log: deque[str] = deque(maxlen=8)
 
     def write(self, label: str, message: str) -> None:
         self.messages.append((label, message.strip()))
@@ -72,6 +78,17 @@ class BuddyUI:
     def estimated_tokens(self) -> int:
         return max(0, len(self.context()) // 4)
 
+    def request_context(self, kind: str, prompt: str) -> str:
+        if kind == "observe":
+            return self.terminal_context()
+        operational = re.search(
+            r"\b(git diff|uncommitted|gpu|cpu|memory|disk|process|ports?|services?|"
+            r"journal|logs?|previous command|exit code)\b",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+        return self.terminal_context() if operational else self.context()
+
     def request(
         self, kind: str, prompt: str = "", *, continuation: bool = False,
         cwd: str | None = None,
@@ -92,11 +109,22 @@ class BuddyUI:
         self.active_request_id = request_id
         self.active_kind = kind
         self.busy = True
-        context = self.terminal_context() if kind == "observe" else self.context()
+        context = self.request_context(kind, prompt)
+        self.stream_text = ""
+        self.request_started = time.monotonic()
+        self.first_delta_at = 0.0
+        self.request_context_tokens = len(context) // 4
+        scope = "terminal" if context == self.terminal_context() else "project + terminal"
+        self.activity_log.append(f"Request started: {kind}; {scope}; ~{self.request_context_tokens:,} tokens")
 
         def worker() -> None:
             try:
-                response = self.client.observe(context) if kind == "observe" else self.client.ask(prompt, context)
+                chunks: list[str] = []
+                stream = self.client.observe_stream(context) if kind == "observe" else self.client.ask_stream(prompt, context)
+                for delta in stream:
+                    chunks.append(delta)
+                    self.results.put(("delta", (request_id, delta)))
+                response = "".join(chunks).strip()
                 self.results.put(("response", (request_id, response)))
             except ModelError as exc:
                 self.results.put(("error", (request_id, str(exc))))
@@ -109,6 +137,7 @@ class BuddyUI:
         self.active_request_id = self.request_serial
         self.active_kind = ""
         self.busy = False
+        self.stream_text = ""
         self.pending.clear()
         if had_work and not silent:
             self.write("Info", "Stopped the current Buddy request and cleared queued requests.")
@@ -178,27 +207,25 @@ class BuddyUI:
                 append_event(self.events, "assistant", {"message": message})
             return
         command = match.group(1).strip().strip("`")
+        self.activity_log.append(f"Tool requested: {command}")
         if not self.config.tools:
             self.write("Error", "Buddy tool requests are disabled in configuration.")
             return
-        try:
-            result = run_command(command, cwd=self.active_cwd, yolo=self.yolo)
-        except (ToolDenied, ValueError) as exc:
-            self.write("Error", f"Buddy tool request denied: {exc}")
-            append_event(self.events, "tool_denied", {"command": command, "message": str(exc)})
-            return
-        self.write("Tool", f"$ {command}\n{result.output}")
-        append_event(self.events, "tool_result", {
-            "command": command, "output": result.output, "status": result.returncode,
-            "cwd": self.active_cwd, "source": "model-live",
-        })
+        request_id = self.active_request_id
+        cwd = self.active_cwd
         original = self.active_question or "Review the latest terminal activity."
-        followup = (
-            f"Original task: {original}\n\nYou requested `{command}`. It exited "
-            f"{result.returncode}. Output:\n{result.output}\n\nContinue solving the original task. "
-            "Request another tool whenever more evidence is useful."
-        )
-        self.request("ask", followup, continuation=True, cwd=self.active_cwd)
+        self.busy = True
+        self.active_kind = "tool"
+        self.request_started = time.monotonic()
+
+        def worker() -> None:
+            try:
+                result = run_command(command, cwd=cwd, yolo=self.yolo)
+                self.results.put(("tool", (request_id, command, cwd, original, result)))
+            except (ToolDenied, ValueError) as exc:
+                self.results.put(("tool_error", (request_id, command, str(exc))))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def restore_session_context(self) -> None:
         """Load prior context without replaying historical questions or tool actions."""
@@ -266,30 +293,50 @@ class BuddyUI:
         self._safe_add(screen, 0, 0, f" Term Buddy | {self.config.model} @ {endpoint}", width - 1, curses.A_BOLD)
         tokens = self.estimated_tokens()
         spinner = "|/-\\"[self.spinner_frame % 4]
-        state = f"thinking {spinner}" if self.busy else "ready"
+        stage = "generating" if self.stream_text else "thinking"
+        state = f"{stage} {spinner}" if self.busy else "ready"
         auto = "on" if self.config.autocomplete else "off"
         status = (
             f" {state} | context ~{tokens:,}/{self.config.context_window_tokens:,} tokens "
-            f"| {mode} | autocomplete {auto}"
+            f"| {mode} | autocomplete {auto} | [details]"
         )
         if self.project_root:
             status += " | project loaded"
         self._safe_add(screen, 1, 0, status, width - 1, curses.A_DIM)
-        self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
+        content_start = 3
+        if self.activity_expanded:
+            elapsed = time.monotonic() - self.request_started if self.busy and self.request_started else 0
+            generated_tokens = len(self.stream_text) // 4
+            rate = generated_tokens / elapsed if elapsed > 0 else 0
+            details = [
+                f" Activity: {self.active_kind or 'idle'} | elapsed {elapsed:.1f}s | request context ~{self.request_context_tokens:,} tokens",
+                f" Output: ~{generated_tokens:,} tokens | ~{rate:.1f} token/s | directory: {self.active_cwd}",
+            ]
+            details.extend(f" {line}" for line in list(self.activity_log)[-2:])
+            for row, line in enumerate(details, start=2):
+                self._safe_add(screen, row, 0, line, width - 1, curses.A_DIM)
+            content_start = 2 + len(details)
+        self._safe_add(screen, content_start - 1, 0, "─" * (width - 1), width - 1, curses.A_DIM)
 
-        available = height - 5
+        available = max(1, height - content_start - 2)
         rendered: list[tuple[str, int]] = []
         colors = {"Buddy": 1, "You": 2, "Tool": 3, "Error": 4, "Shell": 5, "Info": 5}
-        for label, message in self.messages:
+        display_messages = list(self.messages)
+        if self.stream_text and not self.stream_text.lstrip().lower().startswith("<tool"):
+            display_messages.append(("Buddy", self.stream_text))
+        for label, message in display_messages:
             prefix = f"{label}: "
-            wrapped = textwrap.wrap(
-                message, width=max(10, width - len(prefix) - 1),
-                replace_whitespace=False, drop_whitespace=True,
-            ) or [""]
-            rendered.append((prefix + wrapped[0], colors.get(label, 5)))
-            rendered.extend((" " * len(prefix) + part, colors.get(label, 5)) for part in wrapped[1:])
+            first = True
+            for source_line in message.splitlines() or [""]:
+                wrapped = textwrap.wrap(
+                    source_line, width=max(10, width - len(prefix) - 1),
+                    replace_whitespace=False, drop_whitespace=False,
+                ) or [""]
+                for part in wrapped:
+                    rendered.append(((prefix if first else " " * len(prefix)) + part, colors.get(label, 5)))
+                    first = False
             rendered.append(("", 0))
-        for row, (line, color) in enumerate(rendered[-available:], start=3):
+        for row, (line, color) in enumerate(rendered[-available:], start=content_start):
             attr = curses.color_pair(color) if curses.has_colors() and color else 0
             self._safe_add(screen, row, 0, line, width - 1, attr)
 
@@ -310,6 +357,7 @@ class BuddyUI:
             pass
         screen.keypad(True)
         screen.nodelay(True)
+        curses.mousemask(curses.BUTTON1_CLICKED)
         if curses.has_colors():
             curses.start_color()
             curses.use_default_colors()
@@ -328,19 +376,56 @@ class BuddyUI:
             try:
                 while True:
                     kind, message = self.results.get_nowait()
-                    if kind == "response":
+                    if kind == "delta":
+                        request_id, delta = message
+                        if request_id == self.active_request_id:
+                            if not self.first_delta_at:
+                                self.first_delta_at = time.monotonic()
+                                self.activity_log.append(
+                                    f"First token after {self.first_delta_at - self.request_started:.1f}s"
+                                )
+                            self.stream_text += delta
+                    elif kind == "response":
                         request_id, response = message
                         if request_id != self.active_request_id:
                             continue
                         self.busy = False
                         self.active_kind = ""
                         self.handle_model_response(response)
+                        self.stream_text = ""
+                    elif kind == "tool":
+                        request_id, command, cwd, original, result = message
+                        if request_id != self.active_request_id:
+                            continue
+                        self.busy = False
+                        self.active_kind = ""
+                        self.write("Tool", f"$ {command}\n{result.output}")
+                        self.activity_log.append(f"Tool exited {result.returncode}: {command}")
+                        append_event(self.events, "tool_result", {
+                            "command": command, "output": result.output,
+                            "status": result.returncode, "cwd": cwd, "source": "model-live",
+                        })
+                        followup = (
+                            f"Original task: {original}\n\nYou requested `{command}`. It exited "
+                            f"{result.returncode}. Output:\n{result.output}\n\nContinue solving the original task. "
+                            "Request another tool whenever more evidence is useful."
+                        )
+                        self.request("ask", followup, continuation=True, cwd=cwd)
+                    elif kind == "tool_error":
+                        request_id, command, error = message
+                        if request_id != self.active_request_id:
+                            continue
+                        self.busy = False
+                        self.active_kind = ""
+                        self.write("Error", f"Buddy tool request denied: {error}")
+                        append_event(self.events, "tool_denied", {"command": command, "message": error})
                     elif kind == "project":
                         request_id, snapshot = message
                         if request_id != self.active_request_id:
                             continue
                         self.busy = False
                         self.active_kind = ""
+                        self.stream_text = ""
                         self.project_context = snapshot.content
                         self.project_root = snapshot.root
                         summary = (
@@ -369,6 +454,7 @@ class BuddyUI:
                             continue
                         self.busy = False
                         self.active_kind = ""
+                        self.stream_text = ""
                         self.write("Error", error)
             except queue.Empty:
                 pass
@@ -384,6 +470,17 @@ class BuddyUI:
                 time.sleep(0.08)
                 continue
             if key == curses.KEY_RESIZE:
+                continue
+            if key == curses.KEY_MOUSE:
+                try:
+                    _mouse_id, _x, y, _z, _button = curses.getmouse()
+                    if y <= 1:
+                        self.activity_expanded = not self.activity_expanded
+                except curses.error:
+                    pass
+                continue
+            if key == curses.KEY_F2:
+                self.activity_expanded = not self.activity_expanded
                 continue
             if key in ("\n", "\r"):
                 line, self.input_buffer = self.input_buffer, ""
