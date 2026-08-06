@@ -89,6 +89,20 @@ To load the current project into the session context, run this from the left she
 buddy learn project
 ```
 
+Loading makes the snapshot available but does not attach it to normal questions.
+Explicitly opt into the large snapshot only when it is useful:
+
+```bash
+buddy /proj what should I change in ScrapForm.vue to make it green?
+```
+
+Normal questions remain lightweight, even after learning a project:
+
+```bash
+buddy how do I run this on port 3005?
+buddy what is the latest Git commit?
+```
+
 Term Buddy uses `rg --files` (and therefore normal ignore rules) to build a complete
 file tree, then reads text files in useful order until the configured project-context
 budget is full. Binary files, common secret files, private keys, VCS metadata,

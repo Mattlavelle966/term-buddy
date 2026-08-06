@@ -50,6 +50,20 @@ class BuddyUiTests(unittest.TestCase):
             context = ui.request_context("ask", "what was the last commit and its significance?")
             self.assertNotIn("PROJECT CONTENT", context)
 
+    def test_project_context_requires_explicit_project_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.project_context = "PROJECT CONTENT" * 100
+            self.assertNotIn("PROJECT CONTENT", ui.request_context("ask", "change ScrapForm.vue"))
+            self.assertIn(
+                "PROJECT CONTENT",
+                ui.request_context("ask", "change ScrapForm.vue", project_mode=True),
+            )
+            self.assertEqual(
+                ui.parse_question_mode("/proj make ScrapForm green"),
+                (True, "make ScrapForm green"),
+            )
+
     def test_project_context_keeps_token_headroom(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(context_window_tokens=10000, chars_per_token_estimate=3.0, project_context_fraction=0.8)
@@ -75,7 +89,7 @@ class BuddyUiTests(unittest.TestCase):
             ui.busy = True
             ui.active_request_id = 4
             ui.request_serial = 4
-            ui.pending.append(("ask", "later", "/tmp"))
+            ui.pending.append(("ask", "later", "/tmp", False))
             ui.cancel_current(silent=True)
             self.assertFalse(ui.busy)
             self.assertEqual(ui.active_request_id, 5)
