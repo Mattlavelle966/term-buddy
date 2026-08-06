@@ -15,6 +15,23 @@ class Response(io.BytesIO):
         self.close()
 
 
+class ExplodingResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise AttributeError("closed response internals")
+
+    def close(self):
+        pass
+
+
 class ModelTests(unittest.TestCase):
     def test_openai_compatible_response(self):
         payload = {"choices": [{"message": {"content": "  useful answer  "}}]}
@@ -56,3 +73,15 @@ class ModelTests(unittest.TestCase):
             ("request_sent", ""), ("connected", ""),
             ("reasoning", "private thought"),
         ])
+
+    def test_cancelled_stream_swallows_http_reader_shutdown_error(self):
+        client = ModelClient(Config())
+
+        def activity(kind, _value):
+            if kind == "connected":
+                client.cancel()
+
+        with patch("urllib.request.urlopen", return_value=ExplodingResponse()):
+            self.assertEqual(list(client.stream(
+                [{"role": "user", "content": "hi"}], activity_callback=activity,
+            )), [])

@@ -132,8 +132,11 @@ class BuddyUI:
     ) -> None:
         request_cwd = cwd or self.cwd
         requested_project_mode = self.active_project_mode if continuation else bool(project_mode)
+        rewrite_followup = self.is_rewrite_followup(prompt)
         if self.busy:
-            if kind == "ask" and not continuation and self.config.interrupt_on_new_question:
+            if self.active_kind == "observe" and kind == "ask":
+                self.cancel_current(silent=True)
+            elif kind == "ask" and not continuation and self.config.interrupt_on_new_question:
                 previous = self.active_question
                 partial = self.stream_text[-8000:]
                 self.cancel_current(silent=True)
@@ -143,14 +146,12 @@ class BuddyUI:
                         f"{partial or '[no answer tokens yet]'}\n\nNew user instruction: {prompt}"
                     )
                 self.write("Info", "Interrupted the previous Buddy task for the new question.")
-            elif self.active_kind == "observe" and kind == "ask":
-                self.cancel_current(silent=True)
             else:
                 if kind == "ask":
                     self.pending.append((kind, prompt, request_cwd, requested_project_mode))
                 return
         if kind == "ask" and not continuation:
-            if self.is_rewrite_followup(prompt):
+            if rewrite_followup:
                 prompt = (
                     "Rewrite or summarize the previous Buddy answer as requested. Use the chat "
                     "context, do not inspect the project again, and do not request tools.\n\n" + prompt
@@ -193,6 +194,8 @@ class BuddyUI:
                 self.results.put(("response", (request_id, response)))
             except ModelError as exc:
                 self.results.put(("error", (request_id, str(exc))))
+            except Exception as exc:
+                self.results.put(("error", (request_id, f"unexpected model worker error: {exc}")))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -419,9 +422,10 @@ class BuddyUI:
         tokens = self.estimated_tokens()
         spinner = "|/-\\"[self.spinner_frame % 4]
         stage = (
+            "ready" if not self.busy else
             "generating" if self.stream_text else
             "reasoning" if self.reasoning_chars else
-            "prefill" if self.busy and self.server_connected else
+            "prefill" if self.server_connected else
             "waiting-server"
         )
         state = f"{stage} {spinner}" if self.busy else "ready"

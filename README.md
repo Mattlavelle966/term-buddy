@@ -127,7 +127,8 @@ Explicit questions using at least half the model context use `long_context_timeo
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
 Term Buddy closes the streaming connection so compatible model servers also stop
-generation. Starting project
+generation. HTTP reader errors caused by closing a stream are contained in the
+background worker and never written over the TUI. Starting project
 learning also supersedes passive observation. Passive command observations never
 run tools; autonomous tools are reserved for questions you explicitly ask.
 

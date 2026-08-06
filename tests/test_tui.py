@@ -118,3 +118,14 @@ class BuddyUiTests(unittest.TestCase):
             self.assertIn("partial report text", ui.active_question)
             self.assertIn("make it shorter", ui.active_question)
             self.assertEqual(list(ui.pending), [])
+
+    def test_question_interrupting_observation_does_not_inherit_old_rewrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.busy = True
+            ui.active_kind = "observe"
+            ui.active_question = "give me a shorter run down"
+            ui.stream_text = "old observation"
+            with patch("term_buddy.model.ModelClient.cancel"), patch("threading.Thread.start"):
+                ui.request("ask", "what command finds a component directory?")
+            self.assertEqual(ui.active_question, "what command finds a component directory?")

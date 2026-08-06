@@ -31,13 +31,18 @@ def _request_error(exc: urllib.error.URLError) -> ModelError:
 class ModelClient:
     config: Config
     _active_response: Any = field(default=None, init=False, repr=False)
+    _active_cancel_event: threading.Event | None = field(default=None, init=False, repr=False)
     _response_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def cancel(self) -> None:
         """Close the active streaming response so compatible servers stop generation."""
         with self._response_lock:
             response = self._active_response
+            cancel_event = self._active_cancel_event
             self._active_response = None
+            self._active_cancel_event = None
+        if cancel_event is not None:
+            cancel_event.set()
         if response is not None:
             try:
                 response.close()
@@ -90,15 +95,17 @@ class ModelClient:
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         fallback = bytearray()
         response_obj = None
+        cancel_event = threading.Event()
         try:
             if activity_callback:
                 activity_callback("request_sent", "")
             with urllib.request.urlopen(request, timeout=timeout or self.config.request_timeout) as response:
                 response_obj = response
-                if activity_callback:
-                    activity_callback("connected", "")
                 with self._response_lock:
                     self._active_response = response
+                    self._active_cancel_event = cancel_event
+                if activity_callback:
+                    activity_callback("connected", "")
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -121,7 +128,9 @@ class ModelClient:
                             yield str(content)
                     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                         continue
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        except Exception as exc:
+            if cancel_event.is_set():
+                return
             if isinstance(exc, urllib.error.URLError):
                 raise _request_error(exc) from exc
             raise ModelError(f"model request failed: {exc}") from exc
@@ -129,6 +138,7 @@ class ModelClient:
             with self._response_lock:
                 if self._active_response is response_obj:
                     self._active_response = None
+                    self._active_cancel_event = None
         if fallback:
             try:
                 data = json.loads(fallback)
