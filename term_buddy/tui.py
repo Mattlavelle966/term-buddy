@@ -30,12 +30,13 @@ class BuddyUI:
         self.history: deque[dict] = deque(maxlen=config.context_commands * 3)
         self.messages: deque[tuple[str, str]] = deque(maxlen=300)
         self.results: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self.pending: deque[tuple[str, str]] = deque(maxlen=20)
+        self.pending: deque[tuple[str, str, str]] = deque(maxlen=20)
         self.busy = False
         self.cwd = os.getcwd()
         self.input_buffer = ""
         self.spinner_frame = 0
         self.active_question = ""
+        self.active_cwd = self.cwd
         self.project_context = ""
         self.project_root = ""
 
@@ -65,13 +66,18 @@ class BuddyUI:
     def estimated_tokens(self) -> int:
         return max(0, len(self.context()) // 4)
 
-    def request(self, kind: str, prompt: str = "", *, continuation: bool = False) -> None:
+    def request(
+        self, kind: str, prompt: str = "", *, continuation: bool = False,
+        cwd: str | None = None,
+    ) -> None:
+        request_cwd = cwd or self.cwd
         if self.busy:
             if kind == "ask":
-                self.pending.append((kind, prompt))
+                self.pending.append((kind, prompt, request_cwd))
             return
         if kind == "ask" and not continuation:
             self.active_question = prompt
+        self.active_cwd = request_cwd
         self.busy = True
         context = self.context()
 
@@ -118,13 +124,15 @@ class BuddyUI:
             if self.is_project_trigger(event.get("message", "")):
                 self.learn_project()
             else:
-                self.request("ask", event.get("message", ""))
+                self.request("ask", event.get("message", ""), cwd=event.get("cwd", self.cwd))
         elif kind == "project_context":
             self.project_context = event.get("content", "")
             self.project_root = event.get("root", "")
         elif kind == "command_finished":
             command = event.get("command", "")
             status = event.get("status", 0)
+            if command.strip().startswith("buddy "):
+                return
             self.write("Shell", f"[{status}] $ {command}")
             if self.proactive and (status != 0 or command):
                 self.request("observe")
@@ -143,7 +151,7 @@ class BuddyUI:
             self.write("Error", "Buddy tool requests are disabled in configuration.")
             return
         try:
-            result = run_command(command, cwd=self.cwd, yolo=self.yolo)
+            result = run_command(command, cwd=self.active_cwd, yolo=self.yolo)
         except (ToolDenied, ValueError) as exc:
             self.write("Error", f"Buddy tool request denied: {exc}")
             append_event(self.events, "tool_denied", {"command": command, "message": str(exc)})
@@ -151,7 +159,7 @@ class BuddyUI:
         self.write("Tool", f"$ {command}\n{result.output}")
         append_event(self.events, "tool_result", {
             "command": command, "output": result.output, "status": result.returncode,
-            "cwd": self.cwd, "source": "model-live",
+            "cwd": self.active_cwd, "source": "model-live",
         })
         original = self.active_question or "Review the latest terminal activity."
         followup = (
@@ -159,7 +167,17 @@ class BuddyUI:
             f"{result.returncode}. Output:\n{result.output}\n\nContinue solving the original task. "
             "Request another tool whenever more evidence is useful."
         )
-        self.request("ask", followup, continuation=True)
+        self.request("ask", followup, continuation=True, cwd=self.active_cwd)
+
+    def restore_session_context(self) -> None:
+        """Load prior context without replaying historical questions or tool actions."""
+        events, self.offset = read_events(self.events, 0)
+        for event in events:
+            self.history.append(event)
+            self.cwd = event.get("cwd", self.cwd)
+            if event.get("kind") == "project_context":
+                self.project_context = event.get("content", "")
+                self.project_root = event.get("root", "")
 
     def handle_input(self, line: str) -> bool:
         line = line.strip()
@@ -266,6 +284,7 @@ class BuddyUI:
             curses.init_pair(3, curses.COLOR_MAGENTA, -1)
             curses.init_pair(4, curses.COLOR_RED, -1)
             curses.init_pair(5, curses.COLOR_WHITE, -1)
+        self.restore_session_context()
         self.write("Info", "Ask here or use `buddy QUESTION` in the shell. /help lists commands.")
         running = True
         while running:
@@ -304,8 +323,8 @@ class BuddyUI:
             except queue.Empty:
                 pass
             if not self.busy and self.pending:
-                pending_kind, pending_prompt = self.pending.popleft()
-                self.request(pending_kind, pending_prompt)
+                pending_kind, pending_prompt, pending_cwd = self.pending.popleft()
+                self.request(pending_kind, pending_prompt, cwd=pending_cwd)
 
             self.spinner_frame += 1
             self.render(screen)

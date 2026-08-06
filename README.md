@@ -96,6 +96,9 @@ term-buddy --session incident-42
 term-buddy --no-watch
 ```
 
+Creating a new tmux session starts a fresh chat and transcript. Reattaching to an
+existing session restores its context without replaying old questions or tools.
+
 ## Read-only and yolo modes
 
 By default, `/run` directly executes only an allowlist of inspection commands, with

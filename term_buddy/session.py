@@ -57,9 +57,9 @@ class Session:
             raise SessionError("tmux is required but was not found (Debian/Ubuntu: sudo apt install tmux)")
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.directory, 0o700)
-        self.events_path.touch(mode=0o600, exist_ok=True)
+        self.events_path.write_text("", encoding="utf-8")
         transcript = self.directory / "transcript.log"
-        transcript.touch(mode=0o600, exist_ok=True)
+        transcript.write_bytes(b"")
         os.chmod(self.events_path, 0o600)
         os.chmod(transcript, 0o600)
 
