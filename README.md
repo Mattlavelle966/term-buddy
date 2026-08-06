@@ -105,6 +105,10 @@ buddy how do I run this on port 3005?
 buddy what is the latest Git commit?
 ```
 
+Git and system-operational questions remain lightweight even if `/proj` is supplied,
+unless `optimize_operational_project_questions` is disabled. Their authoritative
+information comes from targeted live tools rather than the static project snapshot.
+
 Term Buddy uses `rg --files` (and therefore normal ignore rules) to build a complete
 file tree, then reads text files in useful order until the configured project-context
 budget is full. Binary files, common secret files, private keys, VCS metadata,
@@ -196,7 +200,8 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "summarize_project_on_load": false,
   "interrupt_on_new_question": true,
   "show_activity_panel": true,
-  "activity_panel_height": 7
+  "activity_panel_height": 7,
+  "optimize_operational_project_questions": true
 }
 ```
 

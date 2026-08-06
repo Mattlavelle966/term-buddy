@@ -91,8 +91,12 @@ class ModelClient:
         fallback = bytearray()
         response_obj = None
         try:
+            if activity_callback:
+                activity_callback("request_sent", "")
             with urllib.request.urlopen(request, timeout=timeout or self.config.request_timeout) as response:
                 response_obj = response
+                if activity_callback:
+                    activity_callback("connected", "")
                 with self._response_lock:
                     self._active_response = response
                 for raw_line in response:

@@ -52,4 +52,7 @@ class ModelTests(unittest.TestCase):
                 activity_callback=lambda kind, value: activity.append((kind, value)),
             ))
         self.assertEqual(chunks, ["answer"])
-        self.assertEqual(activity, [("reasoning", "private thought")])
+        self.assertEqual(activity, [
+            ("request_sent", ""), ("connected", ""),
+            ("reasoning", "private thought"),
+        ])

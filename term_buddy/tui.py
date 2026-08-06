@@ -50,6 +50,7 @@ class BuddyUI:
         self.reasoning_chars = 0
         self.reasoning_started = 0.0
         self.last_output_tokens = 0
+        self.server_connected = False
         self.activity_expanded = config.show_activity_panel
         self.activity_log: deque[str] = deque(maxlen=8)
 
@@ -116,6 +117,15 @@ class BuddyUI:
             flags=re.IGNORECASE,
         ))
 
+    @staticmethod
+    def is_operational_question(prompt: str) -> bool:
+        return bool(re.search(
+            r"\b(git|commit|commits|branch|revision|merge|diff|uncommitted|gpu|cpu|memory|"
+            r"disk|process|ports?|services?|journal|logs?|exit code)\b",
+            prompt,
+            flags=re.IGNORECASE,
+        ))
+
     def request(
         self, kind: str, prompt: str = "", *, continuation: bool = False,
         cwd: str | None = None, project_mode: bool | None = None,
@@ -160,6 +170,7 @@ class BuddyUI:
         self.first_delta_at = 0.0
         self.reasoning_chars = 0
         self.reasoning_started = 0.0
+        self.server_connected = False
         self.request_context_tokens = int(len(context) / self.config.chars_per_token_estimate)
         scope = "project + terminal" if requested_project_mode else "lightweight terminal + chat"
         self.activity_log.append(f"Request started: {kind}; {scope}; ~{self.request_context_tokens:,} tokens")
@@ -258,6 +269,16 @@ class BuddyUI:
                 if project_mode and not message:
                     self.write("Error", "Usage: buddy /proj QUESTION")
                     return
+                if (
+                    project_mode and self.config.optimize_operational_project_questions
+                    and self.is_operational_question(message)
+                ):
+                    project_mode = False
+                    self.write(
+                        "Info",
+                        "Using lightweight context: this is an operational/Git question, so targeted "
+                        "tools are faster and more accurate than the full project snapshot.",
+                    )
                 self.request(
                     "ask", message, cwd=event.get("cwd", self.cwd),
                     project_mode=project_mode,
@@ -397,11 +418,17 @@ class BuddyUI:
         self._safe_add(screen, 0, 0, f" Term Buddy | {self.config.model} @ {endpoint}", width - 1, curses.A_BOLD)
         tokens = self.estimated_tokens()
         spinner = "|/-\\"[self.spinner_frame % 4]
-        stage = "generating" if self.stream_text else ("reasoning" if self.reasoning_chars else "thinking")
+        stage = (
+            "generating" if self.stream_text else
+            "reasoning" if self.reasoning_chars else
+            "prefill" if self.busy and self.server_connected else
+            "waiting-server"
+        )
         state = f"{stage} {spinner}" if self.busy else "ready"
         auto = "on" if self.config.autocomplete else "off"
+        context_label = "loaded" if self.project_root else "session"
         status = (
-            f" {state} | context ~{tokens:,}/{self.config.context_window_tokens:,} tokens "
+            f" {state} | {context_label} context ~{tokens:,}/{self.config.context_window_tokens:,} tokens "
             f"| {mode} | autocomplete {auto} | [details]"
         )
         if self.project_root:
@@ -446,7 +473,7 @@ class BuddyUI:
             task = self.active_question.replace("\n", " ") if self.active_question else "No active request"
             details = [
                 "─ Activity trace (F2/click to collapse) " + "─" * width,
-                f" stage={self.active_kind or 'idle'}  elapsed={elapsed:.1f}s  request-context≈{self.request_context_tokens:,} tokens",
+                f" stage={stage}/{self.active_kind or 'idle'}  elapsed={elapsed:.1f}s  request-context≈{self.request_context_tokens:,} tokens",
                 f" progress: reasoning≈{reasoning_tokens:,} tokens  answer≈{generated_tokens:,} tokens  output≈{rate:.1f} token/s",
                 f" cwd: {self.active_cwd}",
                 f" task: {task}",
@@ -493,13 +520,19 @@ class BuddyUI:
                     kind, message = self.results.get_nowait()
                     if kind == "activity":
                         request_id, activity_kind, size = message
-                        if request_id == self.active_request_id and activity_kind == "reasoning":
-                            if not self.reasoning_started:
-                                self.reasoning_started = time.monotonic()
-                                self.activity_log.append(
-                                    f"Reasoning stream began after {self.reasoning_started - self.request_started:.1f}s"
-                                )
-                            self.reasoning_chars += size
+                        if request_id == self.active_request_id:
+                            if activity_kind == "request_sent":
+                                self.activity_log.append("Request sent; waiting for server response")
+                            elif activity_kind == "connected":
+                                self.server_connected = True
+                                self.activity_log.append("Server connected; waiting for first token/prefill")
+                            elif activity_kind == "reasoning":
+                                if not self.reasoning_started:
+                                    self.reasoning_started = time.monotonic()
+                                    self.activity_log.append(
+                                        f"Reasoning stream began after {self.reasoning_started - self.request_started:.1f}s"
+                                    )
+                                self.reasoning_chars += size
                     elif kind == "delta":
                         request_id, delta = message
                         if request_id == self.active_request_id:

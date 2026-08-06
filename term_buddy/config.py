@@ -35,6 +35,7 @@ class Config:
     interrupt_on_new_question: bool = True
     show_activity_panel: bool = True
     activity_panel_height: int = 7
+    optimize_operational_project_questions: bool = True
     system_prompt: str = (
         "You are Term Buddy, a concise senior systems debugging partner. Observe the "
         "user's terminal activity, explain failures, spot risks, and suggest a concrete "

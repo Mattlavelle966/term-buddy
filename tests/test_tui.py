@@ -63,6 +63,8 @@ class BuddyUiTests(unittest.TestCase):
                 ui.parse_question_mode("/proj make ScrapForm green"),
                 (True, "make ScrapForm green"),
             )
+            self.assertTrue(ui.is_operational_question("tell me about the last 2 commits"))
+            self.assertFalse(ui.is_operational_question("make ScrapForm green"))
 
     def test_explicit_markdown_tool_plan_is_recovered(self):
         message = "The next step is clear.\n\n**Next tool request:**\n```\ngit show HEAD\n```"
