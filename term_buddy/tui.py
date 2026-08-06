@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import json
 import os
 import queue
 import re
@@ -12,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .diagnostics import plan_diagnostics
 from .events import append_event, read_events
 from .model import ModelClient, ModelError
-from .project import build_project_snapshot, select_project_context
+from .memory import ProjectMemory
+from .project import select_project_context
 from .tools import ToolDenied, run_command
 
 
@@ -26,6 +29,7 @@ class BuddyUI:
         self.yolo = yolo
         self.proactive = proactive
         self.client = ModelClient(config)
+        self.memory = ProjectMemory(self.events.parent / "memory.sqlite3")
         self.offset = 0
         self.history: deque[dict] = deque(maxlen=config.context_commands * 3)
         self.messages: deque[tuple[str, str]] = deque(maxlen=300)
@@ -51,8 +55,29 @@ class BuddyUI:
         self.reasoning_started = 0.0
         self.last_output_tokens = 0
         self.server_connected = False
-        self.activity_expanded = config.show_activity_panel
+        # Start compact even when an older config enabled the former permanent panel.
+        self.activity_expanded = False
         self.activity_log: deque[str] = deque(maxlen=8)
+        self.activity_path = self.events.parent / "activity.jsonl"
+        self.failure_fingerprint = ""
+        self.failure_count = 0
+        self.tool_attempts: dict[str, int] = {}
+        self.last_retrieval_sources: list[str] = []
+
+    def trace(self, stage: str, detail: str) -> None:
+        """Record an observable harness action in both the pane and a structured log."""
+        line = f"{stage.upper()}  {detail}".strip()
+        self.activity_log.append(line)
+        try:
+            self.activity_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with self.activity_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "time": time.time(), "stage": stage, "detail": detail,
+                    "cwd": self.active_cwd, "request_id": self.active_request_id,
+                }, ensure_ascii=False) + "\n")
+            os.chmod(self.activity_path, 0o600)
+        except OSError:
+            pass
 
     def write(self, label: str, message: str) -> None:
         self.messages.append((label, message.strip()))
@@ -102,17 +127,33 @@ class BuddyUI:
         return max(0, int(len(self.context()) / self.config.chars_per_token_estimate))
 
     def request_context(self, kind: str, prompt: str, *, project_mode: str = "none") -> str:
+        self.last_retrieval_sources = []
         if kind == "observe":
             return self.terminal_context()
         conversation = self.conversation_context()
         lightweight = "\n\n".join(part for part in (self.terminal_context(), conversation) if part)
-        if project_mode == "full":
-            return self.context()
-        if project_mode == "project":
+        root = self.memory.root_for(self.active_cwd)
+        should_retrieve = root and not self.is_operational_question(prompt) and not self.is_rewrite_followup(prompt)
+        if should_retrieve:
+            query_tokens = 8000
+            if re.search(r"\b(architecture|comprehensive|whole|entire|across|overview)\b", prompt, re.IGNORECASE):
+                query_tokens = self.config.automatic_context_tokens
+            elif re.search(r"\b[\w.-]+\.(?:py|js|ts|vue|go|rs|java|c|cpp|h)\b", prompt, re.IGNORECASE):
+                query_tokens = 12000
+            selected, sources = self.memory.retrieve(
+                root, prompt,
+                int(query_tokens * self.config.chars_per_token_estimate),
+            )
+            if sources:
+                self.project_root = root
+                self.last_retrieval_sources = sources
+                self.trace("retrieve", f"{len(sources)} files · {', '.join(sources[:3])}")
+                return "\n\n".join(part for part in (selected, lightweight) if part)
+        # Old session snapshots remain readable, but are no longer sent wholesale.
+        if project_mode in {"project", "full"} and self.project_context:
             selected = select_project_context(
-                self.project_context,
-                prompt,
-                int(self.config.project_query_tokens * self.config.chars_per_token_estimate),
+                self.project_context, prompt,
+                int(self.config.automatic_context_tokens * self.config.chars_per_token_estimate),
             )
             return "\n\n".join(part for part in (selected, lightweight) if part)
         return lightweight
@@ -134,6 +175,18 @@ class BuddyUI:
             prompt,
             flags=re.IGNORECASE,
         ))
+
+    @staticmethod
+    def failure_signature(command: str, status: int, output: str) -> str:
+        executable = command.strip().split(maxsplit=1)[0] if command.strip() else "unknown"
+        lines = [line.strip().lower() for line in output.splitlines() if line.strip()]
+        diagnostic = next((
+            line for line in reversed(lines)
+            if re.search(r"error|not found|no such|denied|failed|invalid|unknown command", line)
+        ), lines[-1] if lines else "")
+        diagnostic = re.sub(r"\b\d+(?:\.\d+)?\b", "#", diagnostic)
+        diagnostic = re.sub(r"\s+", " ", diagnostic)[-240:]
+        return f"{status}:{executable}:{diagnostic}"
 
     def request(
         self, kind: str, prompt: str = "", *, continuation: bool = False,
@@ -163,6 +216,7 @@ class BuddyUI:
                     self.pending.append((kind, prompt, request_cwd, requested_project_mode))
                 return
         if kind == "ask" and not continuation:
+            self.tool_attempts.clear()
             if rewrite_followup:
                 prompt = (
                     "Rewrite or summarize the previous Buddy answer as requested. Use the chat "
@@ -190,7 +244,9 @@ class BuddyUI:
             "project": "focused project + terminal",
             "none": "lightweight terminal + chat",
         }[requested_project_mode]
-        self.activity_log.append(f"Request started: {kind}; {scope}; ~{self.request_context_tokens:,} tokens")
+        if self.last_retrieval_sources:
+            scope = f"retrieved {len(self.last_retrieval_sources)} files"
+        self.trace("model", f"{kind} · {scope} · ~{self.request_context_tokens:,} tokens")
 
         def worker() -> None:
             try:
@@ -215,6 +271,36 @@ class BuddyUI:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def ask_with_evidence(self, prompt: str, cwd: str, project_mode: str = "none") -> None:
+        commands = plan_diagnostics(prompt)
+        if not commands:
+            self.request("ask", prompt, cwd=cwd, project_mode=project_mode)
+            return
+        if self.busy:
+            self.cancel_current(silent=True)
+        self.request_serial += 1
+        request_id = self.request_serial
+        self.active_request_id = request_id
+        self.active_kind = "inspect"
+        self.active_question = prompt
+        self.active_cwd = cwd
+        self.busy = True
+        self.request_started = time.monotonic()
+        self.trace("inspect", f"{len(commands)} deterministic diagnostic{'s' if len(commands) != 1 else ''}")
+
+        def worker() -> None:
+            evidence: list[str] = []
+            for command in commands:
+                self.results.put(("inspect_activity", (request_id, command)))
+                try:
+                    result = run_command(command, cwd=cwd, yolo=False)
+                    evidence.append(f"$ {command}\nexit={result.returncode}\n{result.output}")
+                except (ToolDenied, ValueError) as exc:
+                    evidence.append(f"$ {command}\nDENIED: {exc}")
+            self.results.put(("inspected", (request_id, prompt, cwd, project_mode, "\n\n".join(evidence))))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def cancel_current(self, *, silent: bool = False) -> None:
         had_work = self.busy or bool(self.pending)
         previous_kind = self.active_kind
@@ -228,7 +314,7 @@ class BuddyUI:
         self.reasoning_started = 0.0
         self.pending.clear()
         if had_work:
-            self.activity_log.append(f"Cancelled {previous_kind or 'queued'} task")
+            self.trace("cancel", previous_kind or "queued")
         if had_work and not silent:
             self.write("Info", "Stopped the current Buddy request and cleared queued requests.")
 
@@ -250,19 +336,12 @@ class BuddyUI:
         self.active_request_id = request_id
         self.active_kind = "project"
         root = self.cwd
-        max_chars = max(
-            8000,
-            int(
-                self.config.context_window_tokens
-                * self.config.chars_per_token_estimate
-                * self.config.project_context_fraction
-            ),
-        )
-        self.write("Info", f"Indexing text files under {root}...")
+        self.write("Info", f"Indexing local project memory under {root}...")
+        self.trace("index", root)
 
         def worker() -> None:
             try:
-                self.results.put(("project", (request_id, build_project_snapshot(root, max_chars))))
+                self.results.put(("memory", (request_id, self.memory.index(root))))
             except (OSError, subprocess.SubprocessError) as exc:
                 self.results.put(("error", (request_id, f"project indexing failed: {exc}")))
 
@@ -282,26 +361,10 @@ class BuddyUI:
                 self.learn_project()
             else:
                 project_mode, message = self.parse_question_mode(raw_message)
-                if project_mode != "none" and not self.project_context:
-                    self.write("Error", "No project is loaded. Run `buddy learn project` first.")
-                    return
                 if project_mode != "none" and not message:
-                    self.write("Error", "Usage: buddy /proj QUESTION or buddy /proj-full QUESTION")
+                    self.write("Error", "Usage: buddy QUESTION")
                     return
-                if (
-                    project_mode != "none" and self.config.optimize_operational_project_questions
-                    and self.is_operational_question(message)
-                ):
-                    project_mode = "none"
-                    self.write(
-                        "Info",
-                        "Using lightweight context: this is an operational/Git question, so targeted "
-                        "tools are faster and more accurate than the full project snapshot.",
-                    )
-                self.request(
-                    "ask", message, cwd=event.get("cwd", self.cwd),
-                    project_mode=project_mode,
-                )
+                self.ask_with_evidence(message, event.get("cwd", self.cwd), project_mode)
         elif kind == "project_context":
             self.project_context = event.get("content", "")
             self.project_root = event.get("root", "")
@@ -313,7 +376,21 @@ class BuddyUI:
             if self.busy and self.active_kind == "observe":
                 self.cancel_current(silent=True)
             self.write("Shell", f"[{status}] $ {command}")
-            if self.proactive and (status != 0 or command):
+            if status == 0:
+                self.failure_fingerprint = ""
+                self.failure_count = 0
+                return
+            output = str(event.get("output", ""))
+            executable = command.strip().split(maxsplit=1)[0] if command.strip() else "unknown"
+            fingerprint = self.failure_signature(command, status, output)
+            if fingerprint == self.failure_fingerprint:
+                self.failure_count += 1
+            else:
+                self.failure_fingerprint = fingerprint
+                self.failure_count = 1
+            self.trace("error", f"{executable} failed · repeat {self.failure_count}")
+            if self.proactive and self.failure_count == self.config.error_repeat_threshold:
+                self.write("Info", f"Repeated failure detected ({self.failure_count}×); asking Buddy for one hint.")
                 self.request("observe")
         elif kind == "tool_result" and event.get("source") != "model-live":
             self.write("Tool", f"$ {event.get('command')}\n{event.get('output', '')}")
@@ -325,7 +402,14 @@ class BuddyUI:
                 self.write("Buddy", message)
                 append_event(self.events, "assistant", {"message": message})
             return
-        self.activity_log.append(f"Tool requested: {command}")
+        normalized_command = " ".join(command.split())
+        attempts = self.tool_attempts.get(normalized_command, 0) + 1
+        self.tool_attempts[normalized_command] = attempts
+        if attempts > 1:
+            self.trace("loop", f"blocked repeated tool · {normalized_command}")
+            self.write("Error", f"Stopped a repeated tool loop: {normalized_command}")
+            return
+        self.trace("tool", f"requested · {command}")
         if not self.config.tools:
             self.write("Error", "Buddy tool requests are disabled in configuration.")
             return
@@ -392,10 +476,12 @@ class BuddyUI:
         if line == "/help":
             self.write(
                 "Info",
-                "Ask anything, use /proj QUESTION for focused project context, /proj-full QUESTION "
-                "for the complete loaded snapshot, or use /stop, "
-                "/learn, /run COMMAND, /clear, /help, and /quit.",
+                "Ask normally; project memory is retrieved automatically. Commands: /stop, "
+                "/learn, /run COMMAND, /log, /clear, /help, and /quit. F2 toggles diagnostics.",
             )
+            return True
+        if line == "/log":
+            self.write("Info", f"Structured harness log: {self.activity_path}")
             return True
         if line == "/clear":
             self.messages.clear()
@@ -436,9 +522,7 @@ class BuddyUI:
             self._safe_add(screen, 0, 0, "Term Buddy: pane too small", width - 1, curses.A_BOLD)
             screen.refresh()
             return
-        mode = "YOLO" if self.yolo else "READ-ONLY"
-        endpoint = self.config.endpoint.removeprefix("http://").removeprefix("https://")
-        self._safe_add(screen, 0, 0, f" Term Buddy | {self.config.model} @ {endpoint}", width - 1, curses.A_BOLD)
+        mode = "RW" if self.yolo else "RO"
         tokens = self.estimated_tokens()
         spinner = "|/-\\"[self.spinner_frame % 4]
         stage = (
@@ -449,15 +533,9 @@ class BuddyUI:
             "waiting-server"
         )
         state = f"{stage} {spinner}" if self.busy else "ready"
-        auto = "on" if self.config.autocomplete else "off"
-        context_label = "loaded" if self.project_root else "session"
-        status = (
-            f" {state} | {context_label} context ~{tokens:,}/{self.config.context_window_tokens:,} tokens "
-            f"| {mode} | autocomplete {auto} | [details]"
-        )
-        if self.project_root:
-            status += " | project loaded"
-        self._safe_add(screen, 1, 0, status, width - 1, curses.A_DIM)
+        self._safe_add(screen, 0, 0, f" Buddy · {state} · {mode}", width - 1, curses.A_BOLD)
+        memory_status = "memory on" if self.project_root else "memory off"
+        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · F2 details", width - 1, curses.A_DIM)
         content_start = 3
         self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
         panel_height = 0
@@ -507,7 +585,11 @@ class BuddyUI:
                 self._safe_add(screen, panel_start + offset, 0, line, width - 1, curses.A_DIM)
 
         prompt_row = height - 1
-        self._safe_add(screen, prompt_row - 1, 0, "─" * (width - 1), width - 1, curses.A_DIM)
+        bottom = (
+            f" {self.activity_log[-1]}" if self.activity_log and not panel_height
+            else "─" * (width - 1)
+        )
+        self._safe_add(screen, prompt_row - 1, 0, bottom, width - 1, curses.A_DIM)
         prompt = "> " + self.input_buffer
         self._safe_add(screen, prompt_row, 0, prompt, width - 1, curses.A_BOLD)
         try:
@@ -542,29 +624,40 @@ class BuddyUI:
             try:
                 while True:
                     kind, message = self.results.get_nowait()
-                    if kind == "activity":
+                    if kind == "inspect_activity":
+                        request_id, command = message
+                        if request_id == self.active_request_id:
+                            self.trace("tool", command)
+                    elif kind == "inspected":
+                        request_id, prompt, cwd, project_mode, evidence = message
+                        if request_id != self.active_request_id:
+                            continue
+                        self.busy = False
+                        self.active_kind = ""
+                        self.request(
+                            "ask",
+                            f"{prompt}\n\nAuthoritative local diagnostic evidence:\n{evidence}",
+                            cwd=cwd, project_mode=project_mode,
+                        )
+                    elif kind == "activity":
                         request_id, activity_kind, size = message
                         if request_id == self.active_request_id:
                             if activity_kind == "request_sent":
-                                self.activity_log.append("Request sent; waiting for server response")
+                                self.trace("model", "request sent")
                             elif activity_kind == "connected":
                                 self.server_connected = True
-                                self.activity_log.append("Server connected; waiting for first token/prefill")
+                                self.trace("prefill", "server connected · waiting for first token")
                             elif activity_kind == "reasoning":
                                 if not self.reasoning_started:
                                     self.reasoning_started = time.monotonic()
-                                    self.activity_log.append(
-                                        f"Reasoning stream began after {self.reasoning_started - self.request_started:.1f}s"
-                                    )
+                                    self.trace("reason", f"stream began after {self.reasoning_started - self.request_started:.1f}s")
                                 self.reasoning_chars += size
                     elif kind == "delta":
                         request_id, delta = message
                         if request_id == self.active_request_id:
                             if not self.first_delta_at:
                                 self.first_delta_at = time.monotonic()
-                                self.activity_log.append(
-                                    f"First token after {self.first_delta_at - self.request_started:.1f}s"
-                                )
+                                self.trace("generate", f"first token after {self.first_delta_at - self.request_started:.1f}s")
                             self.stream_text += delta
                     elif kind == "response":
                         request_id, response = message
@@ -572,9 +665,7 @@ class BuddyUI:
                             continue
                         self.busy = False
                         self.active_kind = ""
-                        self.activity_log.append(
-                            f"Answer completed: ~{int(len(response) / self.config.chars_per_token_estimate):,} tokens"
-                        )
+                        self.trace("done", f"~{int(len(response) / self.config.chars_per_token_estimate):,} tokens")
                         self.last_output_tokens = int(
                             len(response) / self.config.chars_per_token_estimate
                         )
@@ -587,7 +678,7 @@ class BuddyUI:
                         self.busy = False
                         self.active_kind = ""
                         self.write("Tool", f"$ {command}\n{result.output}")
-                        self.activity_log.append(f"Tool exited {result.returncode}: {command}")
+                        self.trace("tool", f"exit {result.returncode} · {command}")
                         append_event(self.events, "tool_result", {
                             "command": command, "output": result.output,
                             "status": result.returncode, "cwd": cwd, "source": "model-live",
@@ -608,7 +699,7 @@ class BuddyUI:
                         self.busy = False
                         self.active_kind = ""
                         self.write("Error", f"Buddy tool request denied: {error}")
-                        self.activity_log.append(f"Tool denied: {command}")
+                        self.trace("denied", command)
                         append_event(self.events, "tool_denied", {"command": command, "message": error})
                         original = self.active_question or "Review the latest terminal activity."
                         self.request(
@@ -620,39 +711,27 @@ class BuddyUI:
                             cwd=self.active_cwd,
                             project_mode="none",
                         )
-                    elif kind == "project":
-                        request_id, snapshot = message
+                    elif kind == "memory":
+                        request_id, report = message
                         if request_id != self.active_request_id:
                             continue
                         self.busy = False
                         self.active_kind = ""
                         self.stream_text = ""
-                        self.project_context = snapshot.content
-                        self.project_root = snapshot.root
-                        self.activity_log.append(
-                            f"Project indexed: {snapshot.included}/{snapshot.discovered} files loaded"
-                        )
+                        self.project_context = ""
+                        self.project_root = report.root
+                        self.trace("indexed", f"{report.indexed} changed · {report.unchanged} unchanged")
                         summary = (
-                            f"Loaded {snapshot.included} of {snapshot.discovered} discovered files from "
-                            f"{snapshot.root} ({len(snapshot.content):,} characters; "
-                            f"{snapshot.deferred} deferred by context budget; {snapshot.excluded_directories} "
-                            f"dependency/build/VCS directories excluded; {snapshot.skipped_binary} binary and "
-                            f"{snapshot.skipped_sensitive} sensitive files skipped"
-                            + ("; context filled" if snapshot.truncated else "") + ")."
+                            f"Remembered {report.discovered} files from {report.root}: "
+                            f"{report.indexed} changed, {report.unchanged} unchanged, {report.removed} removed; "
+                            f"{report.excluded_directories} dependency/build/VCS directories excluded, "
+                            f"{report.skipped_binary} binary and {report.skipped_sensitive} sensitive skipped. "
+                            "Future questions retrieve only relevant files automatically."
                         )
                         self.write("Info", summary)
                         append_event(self.events, "project_context", {
-                            "root": snapshot.root, "content": snapshot.content,
-                            "included": snapshot.included, "discovered": snapshot.discovered,
+                            "root": report.root, "content": "", "discovered": report.discovered,
                         })
-                        if self.config.summarize_project_on_load:
-                            self.request(
-                                "ask",
-                                "Study the loaded project context. Summarize the architecture, purpose, "
-                                "important entry points, and anything risky or surprising. Retain this "
-                                "project context for subsequent questions.",
-                                project_mode="full",
-                            )
                     else:
                         request_id, error = message
                         if request_id != self.active_request_id:
@@ -660,7 +739,7 @@ class BuddyUI:
                         self.busy = False
                         self.active_kind = ""
                         self.stream_text = ""
-                        self.activity_log.append(f"Request failed: {error}")
+                        self.trace("error", error)
                         self.write("Error", error)
             except queue.Empty:
                 pass

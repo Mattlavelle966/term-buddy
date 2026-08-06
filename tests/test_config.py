@@ -19,4 +19,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Config().save(Path(directory) / "config.json")
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-
+            values = json.loads(path.read_text())
+            self.assertEqual(set(values), {
+                "endpoint", "model", "api_key", "shell", "session_name", "buddy_width",
+            })

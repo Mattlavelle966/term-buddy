@@ -133,3 +133,20 @@ class BuddyUiTests(unittest.TestCase):
             with patch("term_buddy.model.ModelClient.cancel"), patch("threading.Thread.start"):
                 ui.request("ask", "what command finds a component directory?")
             self.assertEqual(ui.active_question, "what command finds a component directory?")
+
+    def test_only_repeated_failures_trigger_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            success = {"kind": "command_finished", "command": "ls", "status": 0, "cwd": directory, "output": "ok"}
+            failure = {"kind": "command_finished", "command": "npm test", "status": 1, "cwd": directory, "output": "Error: test failed"}
+            with patch.object(ui, "request") as request:
+                ui.handle_event(success)
+                ui.handle_event(failure)
+                request.assert_not_called()
+                ui.handle_event(failure)
+                request.assert_called_once_with("observe")
+
+    def test_failure_signature_ignores_changing_numbers(self):
+        first = BuddyUI.failure_signature("npm test", 1, "Error: 12 tests failed")
+        second = BuddyUI.failure_signature("npm test", 1, "Error: 13 tests failed")
+        self.assertEqual(first, second)

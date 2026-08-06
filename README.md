@@ -1,9 +1,9 @@
 # term-buddy
 
 Term Buddy opens a tmux workspace with your Bash shell on the left and a local-AI
-debugging companion on the right. It observes completed commands and their output,
-comments when useful, answers questions, completes command lines, and can run bounded
-diagnostic commands of its own.
+debugging companion on the right. It quietly records completed commands, offers a hint
+after a failure repeats, answers explicit questions, remembers indexed projects, and
+can run read-only diagnostics of its own.
 
 It is designed for Linux servers: the runtime has no third-party Python packages,
 model traffic goes to the endpoint you configure, and session data is kept in a
@@ -57,7 +57,8 @@ You can also move to the right pane and type questions there. Right-pane command
 
 - `/run COMMAND` runs a diagnostic command.
 - `/stop` stops the current Buddy task, clears queued questions, and discards late responses.
-- `/learn` loads the current project into model context.
+- `/learn` updates local project memory without calling the model.
+- `/log` shows the structured harness-log path.
 - `/clear` clears the Buddy pane.
 - `/help` displays help.
 - `/quit` closes only the Buddy process.
@@ -75,61 +76,42 @@ enable it, set `"autocomplete": true` in the configuration, restart the session,
 then press **Shift-Tab** while editing a command. Term Buddy inserts the returned
 suffix without pressing Enter.
 
-The Buddy header shows its current model and endpoint, approximate context-token
-usage, tool safety mode, autocomplete state, and an animated thinking indicator.
-Model output streams into the pane as it is generated. A bottom activity panel shows
-request scope, elapsed time, first-token latency, approximate output speed,
-reasoning-token progress, working directory, exact tool activity, retries, errors,
-and cancellation. Click `[details]` or press **F2** to collapse or expand it. Private
-chain-of-thought text is not displayed.
-The token count is a conservative source-code estimate and project snapshots retain
-headroom for system instructions, questions, tool results, and generated output.
+The compact header is designed for a narrow server pane. The bottom line always shows
+the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
+Press **F2** for request size, elapsed time, tool activity, retrieval sources, and
+generation progress. A structured copy is written to the private session file
+`activity.jsonl`. Private model chain-of-thought is not displayed.
 
-To load the current project into the session context, run this from the left shell:
+To build or refresh local project memory, run this from the left shell:
 
 ```bash
 buddy learn project
 ```
 
-Loading makes the snapshot available but does not attach it to normal questions.
-`/proj` selects a focused slice of relevant files from the learned snapshot:
+This indexes text locally, skips dependencies, build output, binaries, and likely
+secrets, and stores file hashes so later runs only update changed files. It performs
+no inference and sends nothing to Ornith. Ask normally afterward:
 
 ```bash
-buddy /proj what should I change in ScrapForm.vue to make it green?
+buddy what should I change in ScrapForm.vue to make it green?
 ```
 
-Use the full learned snapshot only when you deliberately accept a potentially long
-prompt-prefill delay:
-
-```bash
-buddy /proj-full give me a comprehensive architecture review
-```
-
-Normal questions remain lightweight, even after learning a project:
+Term Buddy automatically retrieves only relevant files. Ordinary shell and Git
+questions remain lightweight:
 
 ```bash
 buddy how do I run this on port 3005?
 buddy what is the latest Git commit?
 ```
 
-Git and system-operational questions remain lightweight even if `/proj` is supplied,
-unless `optimize_operational_project_questions` is disabled. Their authoritative
-information comes from targeted live tools rather than the static project snapshot.
+Common Git, GPU, port, disk, and memory questions use deterministic read-only
+diagnostics before the model sees the request. The model receives their authoritative
+output instead of having to invent the correct inspection command.
 
-Term Buddy uses `rg --files` (and therefore normal ignore rules) to build a complete
-file tree, then reads text files in useful order until the configured project-context
-budget is full. Binary files, common secret files, private keys, VCS metadata,
-dependency directories, and ignored files are not sent to the model. The loaded
-project remains available for later questions in that Buddy session. Re-run the
-command after substantial project changes.
-
-The completion summary reports discovered and loaded files separately, files
-deferred because the context budget filled, excluded dependency/build/VCS
-directories such as `node_modules`, and binary or sensitive files skipped.
-Loading finishes without automatically asking the model to summarize the entire
-snapshot. This avoids an expensive inference before you have asked a useful
-question. Set `"summarize_project_on_load": true` if you prefer an immediate summary.
-Explicit questions using at least half the model context use `long_context_timeout`.
+Successful commands never invoke the model. A single failure is recorded without
+interrupting you. If the same failure occurs twice consecutively, Buddy requests one
+short hint using the relevant recent terminal evidence. Identical model tool requests
+are blocked on repetition to prevent loops.
 
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
@@ -183,7 +165,9 @@ Generate the default private config:
 term-buddy config
 ```
 
-It is written to `~/.config/term-buddy/config.json`. Common settings:
+It is written to `~/.config/term-buddy/config.json`. The generated configuration is
+intentionally small; context sizes, retrieval budgets, and inference routing are
+automatic:
 
 ```json
 {
@@ -192,25 +176,7 @@ It is written to `~/.config/term-buddy/config.json`. Common settings:
   "api_key": "",
   "shell": "/bin/bash",
   "session_name": "term-buddy",
-  "buddy_width": 42,
-  "max_output_chars": 12000,
-  "context_commands": 12,
-  "request_timeout": 90,
-  "long_context_timeout": 600,
-  "max_response_tokens": 4096,
-  "proactive": true,
-  "autocomplete": false,
-  "tools": true,
-  "web": false,
-  "context_window_tokens": 200000,
-  "chars_per_token_estimate": 3.0,
-  "project_context_fraction": 0.8,
-  "summarize_project_on_load": false,
-  "interrupt_on_new_question": true,
-  "show_activity_panel": true,
-  "activity_panel_height": 7,
-  "optimize_operational_project_questions": true,
-  "project_query_tokens": 24000
+  "buddy_width": 42
 }
 ```
 

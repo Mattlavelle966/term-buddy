@@ -33,10 +33,12 @@ class Config:
     project_context_fraction: float = 0.8
     summarize_project_on_load: bool = False
     interrupt_on_new_question: bool = True
-    show_activity_panel: bool = True
+    show_activity_panel: bool = False
     activity_panel_height: int = 7
     optimize_operational_project_questions: bool = True
     project_query_tokens: int = 24000
+    error_repeat_threshold: int = 2
+    automatic_context_tokens: int = 16000
     system_prompt: str = (
         "You are Term Buddy, a concise senior systems debugging partner. Observe the "
         "user's terminal activity, explain failures, spot risks, and suggest a concrete "
@@ -66,6 +68,12 @@ class Config:
     def save(self, path: Path | None = None) -> Path:
         path = path or _config_home() / "config.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(self), indent=2) + "\n", encoding="utf-8")
+        # Keep the user-facing configuration small. Internal tuning defaults remain
+        # backwards-compatible and advanced values in existing configs are accepted.
+        public = {
+            key: value for key, value in asdict(self).items()
+            if key in {"endpoint", "model", "api_key", "shell", "session_name", "buddy_width"}
+        }
+        path.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
         os.chmod(path, 0o600)
         return path
