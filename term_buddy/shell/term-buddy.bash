@@ -56,13 +56,9 @@ __term_buddy_complete() {
         printf '\n' >&2
         return 0
     fi
-    printf '\r\033[2KBuddy: completing with AI...' >&2
-    suffix="$("$TERM_BUDDY_LAUNCHER" suggest --events "$TERM_BUDDY_EVENTS" --buffer "$READLINE_LINE" 2>/dev/null)"
-    printf '\r\033[2K' >&2
-    if [[ -n "$suffix" ]]; then
-        READLINE_LINE="${READLINE_LINE}${suffix}"
-        READLINE_POINT=${#READLINE_LINE}
-    fi
+    # Shift-Tab must always be interactive-speed. Slow model inference belongs
+    # in an explicit `buddy` request, never in a shell editing keybinding.
+    printf '\a' >&2
 }
 
 buddy() {

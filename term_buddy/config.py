@@ -73,7 +73,10 @@ class Config:
         # backwards-compatible and advanced values in existing configs are accepted.
         public = {
             key: value for key, value in asdict(self).items()
-            if key in {"endpoint", "model", "api_key", "shell", "session_name", "buddy_width"}
+            if key in {
+                "endpoint", "model", "api_key", "shell", "session_name", "buddy_width",
+                "autocomplete", "proactive", "context_watch", "show_activity_panel",
+            }
         }
         path.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
         os.chmod(path, 0o600)

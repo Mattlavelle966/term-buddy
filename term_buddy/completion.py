@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,72 @@ SHELL_BUILTINS = {
 class Completion:
     suffix: str
     candidates: list[str]
+
+
+def _humanize_path(value: str) -> str:
+    stem = Path(value).stem
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", stem).replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", words).strip().lower() or "project"
+
+
+def _git_changes(cwd: Path) -> list[tuple[str, str]]:
+    """Read staged changes quickly; fall back to working-tree changes for a preview."""
+    for arguments in (
+        ["git", "diff", "--cached", "--name-status", "--no-renames"],
+        ["git", "diff", "--name-status", "--no-renames"],
+    ):
+        try:
+            completed = subprocess.run(
+                arguments, cwd=cwd, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=0.2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if completed.returncode != 0:
+            return []
+        changes = []
+        for line in completed.stdout.splitlines():
+            status, separator, path = line.partition("\t")
+            if separator and path:
+                changes.append((status[:1], path))
+        if changes:
+            return changes
+    return []
+
+
+def _commit_message(cwd: Path) -> str:
+    changes = _git_changes(cwd)
+    if not changes:
+        return ""
+    statuses = {status for status, _path in changes}
+    verb = "Add" if statuses == {"A"} else "Remove" if statuses == {"D"} else "Update"
+    if len(changes) == 1:
+        return f"{verb} {_humanize_path(changes[0][1])}"
+    parents = {str(Path(path).parent) for _status, path in changes}
+    if len(parents) == 1 and "." not in parents:
+        subject = _humanize_path(next(iter(parents)))
+    else:
+        subject = "project files"
+    return f"{verb} {subject}"
+
+
+def _git_commit_completion(before: str, cwd: Path) -> Completion | None:
+    match = re.fullmatch(r"\s*git\s+commit\s+-m\s+([\"']?)([^\"']*)", before)
+    if not match:
+        return None
+    quote, typed = match.groups()
+    message = _commit_message(cwd)
+    if not message:
+        return Completion("", [])
+    if quote:
+        if not message.lower().startswith(typed.lower()):
+            return Completion("", [])
+        suffix = message[len(typed):] + quote
+    elif typed:
+        return Completion("", [])
+    else:
+        suffix = f'"{message}"'
+    return Completion(suffix, [f'git commit -m "{message}"'])
 
 
 def _commands(prefix: str) -> list[str]:
@@ -63,6 +130,10 @@ def complete_buffer(buffer: str, cwd_value: str, point: int | None = None) -> Co
     """Complete the token at the cursor using only live PATH/filesystem state."""
     point = len(buffer) if point is None else max(0, min(point, len(buffer)))
     before = buffer[:point]
+    cwd = Path(cwd_value).resolve()
+    git_commit = _git_commit_completion(before, cwd)
+    if git_commit is not None:
+        return git_commit
     match = re.search(r"(?:^|\s)((?:\\.|[^\s])*)$", before)
     token = match.group(1) if match else ""
     token_start = match.start(1) if match else point
@@ -73,7 +144,7 @@ def complete_buffer(buffer: str, cwd_value: str, point: int | None = None) -> Co
         candidates = _commands(token)
     else:
         candidates = _paths(
-            token, Path(cwd_value).resolve(),
+            token, cwd,
             directories_only=command in DIRECTORY_COMMANDS,
         )
     if not candidates:

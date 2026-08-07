@@ -22,4 +22,5 @@ class ConfigTests(unittest.TestCase):
             values = json.loads(path.read_text())
             self.assertEqual(set(values), {
                 "endpoint", "model", "api_key", "shell", "session_name", "buddy_width",
+                "autocomplete", "proactive", "context_watch", "show_activity_panel",
             })

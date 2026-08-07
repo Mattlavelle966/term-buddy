@@ -11,6 +11,14 @@ from term_buddy.tui import BuddyUI
 
 
 class BuddyUiTests(unittest.TestCase):
+    def test_activity_panel_can_start_permanently_enabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(
+                Config(show_activity_panel=True), Path(directory) / "events.jsonl",
+                "test", yolo=False, proactive=True,
+            )
+            self.assertTrue(ui.activity_expanded)
+
     def test_project_learning_triggers(self):
         for prompt in [
             "learn project", "Learn my project!", "please index this project", "scan the project",

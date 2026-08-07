@@ -110,12 +110,13 @@ and pressing Enter executes exactly what you typed. Press **Shift-Tab** to copy 
 visible suffix into Bash's real editable buffer without pressing Enter. Live toggles
 last for the current session and do not rewrite configuration.
 From the left shell, `buddy autocomplete on` and `buddy autocomplete status` control
-the same live setting without involving the model. The header must say `comp on`.
+the same live setting without involving the model. The header must say `comp+`.
 The live preview completes directories for `cd`, files for command arguments, and
 shell built-ins or executables for the first word. Nested prefixes such as
-`cd repos/ter` scan that directory. Previewing is debounced, local, and requires no
-GPU inference. When no preview exists, Shift-Tab retains the on-demand Ornith fallback
-and displays `Buddy: completing with AI...` while it works.
+`cd repos/ter` scan that directory. Typing `git commit -m ` previews a short message
+derived from staged changes. Previewing is debounced, local, and requires no GPU
+inference. Shift-Tab never waits for Ornith; it returns immediately when no local
+suggestion exists.
 
 The shell runs through a transparent PTY input adapter so ghost text never enters the
 executable command. The adapter activates only at a marked Bash prompt; after Enter,

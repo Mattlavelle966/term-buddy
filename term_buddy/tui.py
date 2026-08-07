@@ -63,8 +63,7 @@ class BuddyUI:
         self.reasoning_started = 0.0
         self.last_output_tokens = 0
         self.server_connected = False
-        # Start compact even when an older config enabled the former permanent panel.
-        self.activity_expanded = False
+        self.activity_expanded = config.show_activity_panel
         self.activity_log: deque[str] = deque(maxlen=8)
         self.activity_path = self.events.parent / "activity.jsonl"
         self.failure_fingerprint = ""

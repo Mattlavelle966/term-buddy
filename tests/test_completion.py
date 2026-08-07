@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,3 +39,19 @@ class CompletionTests(unittest.TestCase):
             with patch.dict(os.environ, {"PATH": directory}):
                 result = complete_buffer("special-c", directory)
             self.assertEqual(result.suffix, "ommand")
+
+    def test_git_commit_message_uses_staged_change_without_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run(["git", "init", "-q"], cwd=directory, check=True)
+            path = Path(directory) / "ScrapForm.vue"
+            path.write_text("form\n")
+            subprocess.run(["git", "add", "ScrapForm.vue"], cwd=directory, check=True)
+            result = complete_buffer("git commit -m ", directory)
+            self.assertEqual(result.suffix, '"Add scrap form"')
+
+    def test_git_commit_message_completes_inside_quote(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "term_buddy.completion._commit_message", return_value="Update project files"
+        ):
+            result = complete_buffer('git commit -m "Up', directory)
+            self.assertEqual(result.suffix, 'date project files"')
