@@ -21,10 +21,10 @@ PROMPT_MARKER = re.compile(rb"\x1b\]777;term-buddy-prompt\x07")
 SHIFT_TAB = b"\x1b[Z"
 DIM = b"\x1b[90m"
 RESET = b"\x1b[0m"
-SAVE_CURSOR = b"\x1b7"
-RESTORE_CURSOR = b"\x1b8"
+CLEAR_RIGHT = b"\x1b[K"
 GHOST_START = b"\x1b]777;term-buddy-ghost-start\x07"
 GHOST_END = b"\x1b]777;term-buddy-ghost-end\x07"
+ANSI_ESCAPE = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
 def display_width(value: str) -> int:
@@ -37,6 +37,28 @@ def display_width(value: str) -> int:
     return width
 
 
+def visible_tail_width(value: bytes) -> int:
+    """Measure the visible final line of terminal output such as a styled PS1."""
+    plain = ANSI_ESCAPE.sub(b"", value).decode(errors="replace")
+    tail = re.split(r"[\r\n]", plain)[-1].expandtabs(8)
+    return display_width(tail)
+
+
+def truncate_cells(value: str, limit: int) -> str:
+    """Return the longest prefix that occupies no more than ``limit`` cells."""
+    if limit <= 0:
+        return ""
+    result: list[str] = []
+    used = 0
+    for character in value:
+        character_width = display_width(character)
+        if used + character_width > limit:
+            break
+        result.append(character)
+        used += character_width
+    return "".join(result)
+
+
 @dataclass(slots=True)
 class LineState:
     text: str = ""
@@ -44,6 +66,8 @@ class LineState:
     prompt_active: bool = False
     cwd: str = ""
     ghost: str = ""
+    ghost_width: int = 0
+    prompt_width: int = 0
     changed_at: float = 0.0
     valid: bool = True
 
@@ -53,6 +77,8 @@ class LineState:
         self.prompt_active = True
         self.cwd = cwd
         self.ghost = ""
+        self.ghost_width = 0
+        self.prompt_width = 0
         self.changed_at = time.monotonic()
         self.valid = True
 
@@ -91,6 +117,8 @@ class InputAdapter:
         self.master_fd = -1
         self.original_terminal: list | None = None
         self.scan_tail = b""
+        self.prompt_output = b""
+        self.collecting_prompt = False
         self.running = True
         self.child_pid = -1
 
@@ -107,15 +135,9 @@ class InputAdapter:
 
     def _clear_ghost(self) -> None:
         if self.state.ghost:
-            # Cursor-left cannot cross a wrapped terminal row.  Keep the real
-            # cursor parked at the Readline insertion point instead, repaint
-            # every occupied ghost cell, and restore it exactly where it was.
-            spaces = b" " * display_width(self.state.ghost)
-            self._write(
-                sys.stdout.fileno(),
-                GHOST_START + SAVE_CURSOR + spaces + RESTORE_CURSOR + GHOST_END,
-            )
+            self._write(sys.stdout.fileno(), CLEAR_RIGHT)
             self.state.ghost = ""
+            self.state.ghost_width = 0
 
     def _accept_ghost(self) -> bool:
         if not self.state.ghost:
@@ -127,6 +149,7 @@ class InputAdapter:
         return True
 
     def _forward_key(self, data: bytes) -> None:
+        self.collecting_prompt = False
         if data == SHIFT_TAB and self.autocomplete_flag.exists() and self.state.ghost:
             self._accept_ghost()
             return
@@ -198,7 +221,31 @@ class InputAdapter:
             except OSError:
                 cwd = self.state.cwd or os.getcwd()
             self.state.reset_prompt(cwd)
+            self.prompt_output = scan[markers[-1].end():]
+            self.collecting_prompt = True
+            self.state.prompt_width = visible_tail_width(self.prompt_output)
+        elif self.collecting_prompt:
+            self.prompt_output = (self.prompt_output + data)[-4096:]
+            self.state.prompt_width = visible_tail_width(self.prompt_output)
         self.scan_tail = scan[-512:]
+
+    def _terminal_columns(self) -> int:
+        try:
+            return os.get_terminal_size(sys.stdout.fileno()).columns
+        except OSError:
+            return 0
+
+    def _visible_preview(self, suffix: str) -> str:
+        """Clip a ghost to its current row so cursor-left remains reliable."""
+        columns = self._terminal_columns()
+        if columns <= 0:
+            return suffix
+        real_width = self.state.prompt_width + display_width(self.state.text[:self.state.cursor])
+        cursor_column = real_width % columns
+        # Never paint the last cell: many terminals enter a pending autowrap
+        # state there even before another character is printed.
+        available = columns - cursor_column - 1
+        return truncate_cells(suffix, available)
 
     def _render_preview(self) -> None:
         if (
@@ -209,15 +256,14 @@ class InputAdapter:
         suffix = self.state.preview()
         if not suffix or any(ord(character) < 32 or ord(character) == 127 for character in suffix):
             return
+        visible = self._visible_preview(suffix)
+        if not visible:
+            return
         self.state.ghost = suffix
-        encoded = suffix.encode(errors="replace")
-        # Saving and restoring the cursor is essential here: CSI n D only
-        # moves within the current row, corrupting input when a ghost wraps at
-        # the right edge of a narrow tmux pane.
-        self._write(
-            sys.stdout.fileno(),
-            GHOST_START + SAVE_CURSOR + DIM + encoded + RESET + RESTORE_CURSOR + GHOST_END,
-        )
+        self.state.ghost_width = display_width(visible)
+        encoded = visible.encode(errors="replace")
+        self._write(sys.stdout.fileno(), GHOST_START + DIM + encoded + RESET + GHOST_END)
+        self._write(sys.stdout.fileno(), f"\x1b[{self.state.ghost_width}D".encode())
 
     def _resize_child(self) -> None:
         if self.master_fd < 0:

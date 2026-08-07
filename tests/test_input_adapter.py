@@ -3,15 +3,12 @@ import unittest
 from pathlib import Path
 
 from term_buddy.input_adapter import (
-    GHOST_END,
-    GHOST_START,
-    RESTORE_CURSOR,
-    SAVE_CURSOR,
     InputAdapter,
     LineState,
     PROMPT_MARKER,
     SHIFT_TAB,
     display_width,
+    visible_tail_width,
 )
 
 
@@ -20,9 +17,13 @@ class RecordingAdapter(InputAdapter):
         super().__init__(["bash"], events)
         self.writes: list[tuple[int, bytes]] = []
         self.master_fd = 99
+        self.columns = 80
 
     def _write(self, fd: int, data: bytes) -> None:
         self.writes.append((fd, data))
+
+    def _terminal_columns(self) -> int:
+        return self.columns
 
 
 class InputAdapterTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class InputAdapterTests(unittest.TestCase):
         marker = b"\x1b]777;term-buddy-prompt\x07"
         self.assertIsNotNone(PROMPT_MARKER.search(marker))
 
-    def test_wrapping_ghost_uses_saved_cursor_and_erases_every_cell(self):
+    def test_wrapping_ghost_is_clipped_before_terminal_edge(self):
         with tempfile.TemporaryDirectory() as directory:
             events = Path(directory) / "events.jsonl"
             Path(directory, "autocomplete.enabled").write_text("on\n")
@@ -61,22 +62,16 @@ class InputAdapterTests(unittest.TestCase):
             adapter.state.reset_prompt(directory)
             adapter.state.insert("cd repo")
             adapter.state.changed_at = 0
+            adapter.columns = 14
 
             adapter._render_preview()
-            rendered = adapter.writes[-1][1]
-            self.assertEqual(
-                rendered,
-                GHOST_START + SAVE_CURSOR + b"\x1b[90msitories/\x1b[0m"
-                + RESTORE_CURSOR + GHOST_END,
-            )
-
-            adapter._clear_ghost()
-            erased = adapter.writes[-1][1]
-            self.assertEqual(
-                erased,
-                GHOST_START + SAVE_CURSOR + b" " * len("sitories/")
-                + RESTORE_CURSOR + GHOST_END,
-            )
+            self.assertIn(b"\x1b[90msitori\x1b[0m", adapter.writes[-2][1])
+            self.assertEqual(adapter.writes[-1][1], b"\x1b[6D")
+            # Acceptance retains the entire completion, not just its preview.
+            self.assertEqual(adapter.state.ghost, "sitories/")
 
     def test_display_width_handles_wide_and_combining_characters(self):
         self.assertEqual(display_width("abc界e\u0301"), 6)
+
+    def test_visible_prompt_width_ignores_terminal_styling(self):
+        self.assertEqual(visible_tail_width(b"old\n\x1b[31mproject\x1b[0m \xe2\x9d\xaf "), 10)
