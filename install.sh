@@ -17,6 +17,8 @@ INSTALL_ROOT="$PREFIX/lib/term-buddy"
 install -d "$INSTALL_ROOT" "$PREFIX/bin"
 install -d "$INSTALL_ROOT/term_buddy"
 cp -R "$SCRIPT_DIR/term_buddy/." "$INSTALL_ROOT/term_buddy/"
+install -d "$INSTALL_ROOT/assets"
+cp -R "$SCRIPT_DIR/assets/." "$INSTALL_ROOT/assets/"
 printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \

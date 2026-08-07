@@ -150,3 +150,10 @@ class BuddyUiTests(unittest.TestCase):
         first = BuddyUI.failure_signature("npm test", 1, "Error: 12 tests failed")
         second = BuddyUI.failure_signature("npm test", 1, "Error: 13 tests failed")
         self.assertEqual(first, second)
+
+    def test_startup_logo_only_appears_when_it_fits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            self.assertTrue(ui.logo)
+            self.assertFalse(ui.splash_fits(24, 42))
+            self.assertTrue(ui.splash_fits(30, 140))

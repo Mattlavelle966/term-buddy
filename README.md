@@ -109,6 +109,9 @@ the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`
 Press **F2** for request size, elapsed time, tool activity, retrieval sources, and
 generation progress. A structured copy is written to the private session file
 `activity.jsonl`. Private model chain-of-thought is not displayed.
+At startup, the full ASCII logo appears for 2.5 seconds when the Buddy pane is at
+least 128 columns wide and 24 rows tall. Smaller panes skip it automatically, and
+any key dismisses it immediately.
 
 To build or refresh local project memory, run this from the left shell:
 

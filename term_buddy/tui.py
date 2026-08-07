@@ -21,6 +21,14 @@ from .project import select_project_context
 from .tools import ToolDenied, run_command
 
 
+def load_logo() -> tuple[str, ...]:
+    path = Path(__file__).resolve().parent.parent / "assets" / "term-buddy-logo.txt"
+    try:
+        return tuple(path.read_text(encoding="utf-8").splitlines())
+    except OSError:
+        return ()
+
+
 class BuddyUI:
     def __init__(self, config: Config, events: Path, session: str, *, yolo: bool, proactive: bool):
         self.config = config
@@ -63,6 +71,28 @@ class BuddyUI:
         self.failure_count = 0
         self.tool_attempts: dict[str, int] = {}
         self.last_retrieval_sources: list[str] = []
+        self.logo = load_logo()
+        self.splash_until = time.monotonic() + 2.5
+
+    def splash_fits(self, height: int, width: int) -> bool:
+        return bool(
+            self.logo
+            and len(self.logo) + 2 <= height
+            and max(map(len, self.logo), default=0) + 2 <= width
+        )
+
+    def render_splash(self, screen: curses.window, height: int, width: int) -> None:
+        top = max(0, (height - len(self.logo) - 1) // 2)
+        attr = curses.color_pair(1) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+        for offset, line in enumerate(self.logo):
+            column = max(0, (width - len(line)) // 2)
+            self._safe_add(screen, top + offset, column, line, width - column - 1, attr)
+        hint = "Term Buddy · press any key"
+        self._safe_add(
+            screen, min(height - 1, top + len(self.logo) + 1),
+            max(0, (width - len(hint)) // 2), hint, len(hint), curses.A_DIM,
+        )
+        screen.refresh()
 
     def trace(self, stage: str, detail: str) -> None:
         """Record an observable harness action in both the pane and a structured log."""
@@ -518,6 +548,9 @@ class BuddyUI:
     def render(self, screen: curses.window) -> None:
         screen.erase()
         height, width = screen.getmaxyx()
+        if time.monotonic() < self.splash_until and self.splash_fits(height, width):
+            self.render_splash(screen, height, width)
+            return
         if height < 7 or width < 24:
             self._safe_add(screen, 0, 0, "Term Buddy: pane too small", width - 1, curses.A_BOLD)
             screen.refresh()
@@ -756,6 +789,9 @@ class BuddyUI:
                 key = screen.get_wch()
             except curses.error:
                 time.sleep(0.08)
+                continue
+            if time.monotonic() < self.splash_until and self.splash_fits(*screen.getmaxyx()):
+                self.splash_until = 0.0
                 continue
             if key == curses.KEY_RESIZE:
                 continue
