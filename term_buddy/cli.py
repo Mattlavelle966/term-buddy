@@ -14,6 +14,7 @@ from .input_adapter import run_input_adapter
 from .model import ModelClient, ModelError
 from .session import Session, SessionError, capture_pane
 from .tui import BuddyUI
+from .web import WebError, ensure_searxng
 
 
 def parser() -> argparse.ArgumentParser:
@@ -162,12 +163,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "stop":
             session.stop()
             return 0
+        if config.web and config.searxng_managed:
+            print("term-buddy: ensuring the dedicated SearXNG container is running...")
+            ensure_searxng(config)
         if not session.exists():
             if args.action == "attach":
                 print(f"term-buddy: session {name!r} does not exist", file=sys.stderr)
                 return 1
             session.create()
         return session.attach()
-    except SessionError as exc:
+    except (SessionError, WebError) as exc:
         print(f"term-buddy: {exc}", file=sys.stderr)
         return 1

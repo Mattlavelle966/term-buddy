@@ -23,4 +23,5 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(set(values), {
                 "endpoint", "model", "api_key", "shell", "session_name", "buddy_width",
                 "autocomplete", "proactive", "context_watch", "show_activity_panel",
+                "web", "searxng_url", "searxng_managed",
             })

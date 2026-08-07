@@ -28,6 +28,10 @@ class Config:
     autocomplete: bool = False
     tools: bool = True
     web: bool = False
+    searxng_url: str = "http://127.0.0.1:8888"
+    searxng_managed: bool = True
+    searxng_container: str = "term-buddy-searxng"
+    searxng_image: str = "docker.io/searxng/searxng:latest"
     context_window_tokens: int = 200000
     chars_per_token_estimate: float = 3.0
     project_context_fraction: float = 0.8
@@ -76,6 +80,7 @@ class Config:
             if key in {
                 "endpoint", "model", "api_key", "shell", "session_name", "buddy_width",
                 "autocomplete", "proactive", "context_watch", "show_activity_panel",
+                "web", "searxng_url", "searxng_managed",
             }
         }
         path.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")

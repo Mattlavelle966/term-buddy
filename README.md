@@ -126,6 +126,10 @@ until the next prompt rather than guessing the state of the command line.
 
 The compact header is designed for a narrow server pane. The bottom line always shows
 the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
+Scroll the Buddy pane with the mouse wheel to read older chat. Wheel down or press
+**End** to return to the latest response; **Page Up/Page Down** also navigate history.
+Mouse support is enabled only for the Term Buddy tmux session and does not edit your
+tmux configuration.
 Press **F2** for a compact menu that toggles autocomplete, repeated-command hints,
 forgotten-`buddy` questions, and detailed activity. Detailed activity includes request
 size, elapsed time, tool activity, retrieval sources, and generation progress. A
@@ -241,9 +245,26 @@ automatic:
   "api_key": "",
   "shell": "/bin/bash",
   "session_name": "term-buddy",
-  "buddy_width": 42
+  "buddy_width": 42,
+  "autocomplete": false,
+  "proactive": true,
+  "context_watch": false,
+  "show_activity_panel": false,
+  "web": false,
+  "searxng_url": "http://127.0.0.1:8888",
+  "searxng_managed": true
 }
 ```
+
+To enable private web research, set `"web": true`. On the next launch Term Buddy
+creates one dedicated `term-buddy-searxng` Docker container, binds it only to
+`127.0.0.1:8888`, and leaves it running with `unless-stopped`. Later launches inspect
+and reuse that exact container rather than creating another. Search JSON is enabled in
+`~/.config/term-buddy/searxng/config/settings.yml`. Explicit requests such as “search online
+for the current Nuxt docs” route directly to SearXNG; the model can request additional
+searches or safely fetch a public result page. `/web QUERY` is the explicit shortcut.
+Docker must be installed and usable by your account. `term-buddy stop` stops the tmux
+session, not the dedicated background search container.
 
 Environment variables override the corresponding file values:
 

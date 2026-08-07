@@ -124,6 +124,9 @@ class Session:
             terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
             buddy_width = min(self.config.buddy_width, max(20, terminal_width // 2))
             self._tmux("set-option", "-t", self.name, "remain-on-exit", "on")
+            # Session-local only: enables wheel forwarding to curses without
+            # modifying the user's ~/.tmux.conf or other tmux sessions.
+            self._tmux("set-option", "-t", self.name, "mouse", "on", check=False)
             split = self._tmux(
                 "split-window", "-h", "-l", str(buddy_width), "-t", left_pane,
                 "-P", "-F", "#{pane_id}", buddy_command,

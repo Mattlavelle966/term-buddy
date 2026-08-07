@@ -1,3 +1,4 @@
+import curses
 import os
 import unittest
 import tempfile
@@ -11,6 +12,40 @@ from term_buddy.tui import BuddyUI
 
 
 class BuddyUiTests(unittest.TestCase):
+    def test_web_requests_are_extracted_for_simple_models(self):
+        self.assertEqual(
+            BuddyUI.extract_web_request("<search>latest Nuxt docs</search>"),
+            ("search", "latest Nuxt docs"),
+        )
+        self.assertEqual(
+            BuddyUI.extract_web_request("<fetch>https://nuxt.com/docs</fetch>"),
+            ("fetch", "https://nuxt.com/docs"),
+        )
+
+    def test_explicit_online_question_routes_directly_to_search(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(web=True), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            with patch.object(ui, "start_web_request") as search, patch.object(ui, "request") as request:
+                ui.ask_with_evidence("search online for current Nuxt docs", directory)
+            search.assert_called_once()
+            request.assert_not_called()
+
+    def test_chat_scroll_is_bounded_and_returns_to_latest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.chat_max_scroll = 20
+            ui.scroll_chat(6)
+            self.assertEqual(ui.chat_scroll, 6)
+            ui.scroll_chat(100)
+            self.assertEqual(ui.chat_scroll, 20)
+            ui.scroll_chat(-100)
+            self.assertEqual(ui.chat_scroll, 0)
+
+    def test_mouse_wheel_direction(self):
+        self.assertEqual(BuddyUI.mouse_scroll_direction(curses.BUTTON4_PRESSED), 1)
+        self.assertEqual(BuddyUI.mouse_scroll_direction(curses.BUTTON5_PRESSED), -1)
+        self.assertEqual(BuddyUI.mouse_scroll_direction(curses.BUTTON1_CLICKED), 0)
+
     def test_activity_panel_can_start_permanently_enabled(self):
         with tempfile.TemporaryDirectory() as directory:
             ui = BuddyUI(

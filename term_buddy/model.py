@@ -193,6 +193,7 @@ class ModelClient:
                 "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
                 " Never describe a planned command or put it in a Markdown block. When another tool "
                 "is needed, the entire response must be exactly `<tool>command</tool>`."
+                + self._web_instructions()
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout)
@@ -216,9 +217,20 @@ class ModelClient:
                 "commit and its impact, prefer `git show --stat --oneline HEAD`, then `git show HEAD`."
                 " Never describe a planned command or put it in a Markdown block. When another tool "
                 "is needed, the entire response must be exactly `<tool>command</tool>`."
+                + self._web_instructions()
             )},
             {"role": "user", "content": f"Terminal context:\n{context}\n\nQuestion:\n{question}"},
         ], timeout=timeout, activity_callback=activity_callback)
+
+    def _web_instructions(self) -> str:
+        if not self.config.web:
+            return ""
+        return (
+            " For current online information, reply exactly `<search>query</search>`. "
+            "Search results include URLs. To read one result, reply exactly "
+            "`<fetch>https://result-url</fetch>`. Never invent search results or claim a page "
+            "was read without returned evidence. In the final answer, cite the URLs used."
+        )
 
     def suggest(self, command_buffer: str, context: str) -> str:
         answer = self.complete([

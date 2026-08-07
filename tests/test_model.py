@@ -46,6 +46,15 @@ class ModelTests(unittest.TestCase):
             ModelClient(config).ask("question", "x" * 240)
         self.assertEqual(request.call_args.kwargs["timeout"], 321)
 
+    def test_web_enabled_prompt_exposes_search_and_fetch_protocol(self):
+        payload = {"choices": [{"message": {"content": "answer"}}]}
+        with patch("urllib.request.urlopen", return_value=Response(json.dumps(payload).encode())) as request:
+            ModelClient(Config(web=True)).ask("latest docs", "")
+        body = json.loads(request.call_args.args[0].data)
+        system = body["messages"][0]["content"]
+        self.assertIn("<search>query</search>", system)
+        self.assertIn("<fetch>https://result-url</fetch>", system)
+
     def test_streaming_sse_yields_content_deltas(self):
         stream = (
             b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
