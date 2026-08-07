@@ -27,6 +27,10 @@ __term_buddy_mark_command() {
     chmod 0600 "$command_file" 2>/dev/null || true
 }
 
+__term_buddy_prompt_marker() {
+    printf '\033]777;term-buddy-prompt\007'
+}
+
 __term_buddy_complete() {
     local suffix index
     local -a local_matches
@@ -78,10 +82,13 @@ bind -x '"\e[Z":__term_buddy_complete' 2>/dev/null || true
 # it. Unlike HISTCMD, this still fires when HISTCONTROL removes duplicate entries.
 PS0='$(__term_buddy_mark_command)'"${PS0:-}"
 
-if [[ -n "${PROMPT_COMMAND:-}" ]]; then
+if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+    PROMPT_COMMAND=(__term_buddy_emit_prompt "${PROMPT_COMMAND[@]}" __term_buddy_prompt_marker)
+elif [[ -n "${PROMPT_COMMAND:-}" ]]; then
     PROMPT_COMMAND="__term_buddy_emit_prompt;${PROMPT_COMMAND}"
+    PROMPT_COMMAND="${PROMPT_COMMAND%;};__term_buddy_prompt_marker"
 else
-    PROMPT_COMMAND="__term_buddy_emit_prompt"
+    PROMPT_COMMAND="__term_buddy_emit_prompt;__term_buddy_prompt_marker"
 fi
 
 "$TERM_BUDDY_LAUNCHER" emit shell_ready --events "$TERM_BUDDY_EVENTS" \

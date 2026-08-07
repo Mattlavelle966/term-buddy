@@ -95,8 +95,9 @@ class Session:
 
         environment = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
         shell_command = (
-            f"exec env {environment} {shlex.quote(self.config.shell)} "
-            f"--rcfile {shlex.quote(str(bootstrap))} -i"
+            f"exec env {environment} {shlex.quote(str(launcher))} _shell "
+            f"--events {shlex.quote(str(self.events_path))} -- "
+            f"{shlex.quote(self.config.shell)} --rcfile {shlex.quote(str(bootstrap))} -i"
         )
         buddy_command = (
             f"exec env {environment} {shlex.quote(str(launcher))} _buddy "

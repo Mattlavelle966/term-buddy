@@ -10,6 +10,7 @@ from . import __version__
 from .completion import complete_buffer
 from .config import Config
 from .events import append_event, read_events
+from .input_adapter import run_input_adapter
 from .model import ModelClient, ModelError
 from .session import Session, SessionError, capture_pane
 from .tui import BuddyUI
@@ -47,6 +48,10 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--buffer", required=True)
     complete.add_argument("--point", type=int)
     complete.add_argument("--cwd", required=True)
+
+    shell_adapter = sub.add_parser("_shell", help=argparse.SUPPRESS)
+    shell_adapter.add_argument("--events", type=Path, required=True)
+    shell_adapter.add_argument("command", nargs=argparse.REMAINDER)
 
     buddy = sub.add_parser("_buddy", help=argparse.SUPPRESS)
     buddy.add_argument("--events", type=Path, required=True)
@@ -90,8 +95,14 @@ def transcript_tail(events_path: Path, limit: int) -> str:
     if not path.exists():
         return ""
     with path.open("rb") as handle:
-        handle.seek(max(0, path.stat().st_size - limit * 2))
+        handle.seek(max(0, path.stat().st_size - limit * 2 - 4096))
         content = handle.read().decode("utf-8", errors="replace")
+    ghost = re.compile(
+        r"\x1b\]777;term-buddy-ghost-start\x07.*?"
+        r"\x1b\]777;term-buddy-ghost-end\x07",
+        flags=re.DOTALL,
+    )
+    content = ghost.sub("", content)
     ansi = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
     return ansi.sub("", content)[-limit:]
 
@@ -104,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
         for candidate in result.candidates:
             print(candidate)
         return 0
+    if args.action == "_shell":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        return run_input_adapter(command, args.events)
     config = load_config(args)
 
     if args.action == "emit":

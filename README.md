@@ -102,27 +102,33 @@ back to the model so it can recover instead of abandoning the task.
 Term Buddy also recognizes explicitly labeled Markdown tool requests from models
 that occasionally fail to emit the required `<tool>...</tool>` wrapper.
 
-Autocomplete is off by default because it performs an inference while you edit.
+Inline completion is off by default.
 Press **F2**, then **A**, or enter `/autocomplete on` in the Buddy pane to enable it
-immediately. Press **Shift-Tab** while editing a shell command to insert the returned
-suffix without pressing Enter. Live toggles last for the current session and do not
-rewrite configuration.
+immediately. As you type, Term Buddy scans live local state and draws its best suffix
+directly in front of the cursor using dim text. The ghost is visual-only: ignoring it
+and pressing Enter executes exactly what you typed. Press **Shift-Tab** to copy the
+visible suffix into Bash's real editable buffer without pressing Enter. Live toggles
+last for the current session and do not rewrite configuration.
 From the left shell, `buddy autocomplete on` and `buddy autocomplete status` control
 the same live setting without involving the model. The header must say `comp on`.
-Completion is deliberately on-demand rather than continuously generating ghost text.
-Shift-Tab first scans live local state. It completes directories
-for `cd`, files for command arguments, and shell built-ins or executables for the
-first word. Unique matches are inserted immediately; ambiguous matches insert their
-common prefix or display up to twelve choices in the shell. Nested prefixes such as
-`cd repos/ter` scan that directory. This local path requires no GPU inference.
-When the local scan finds nothing, the shell displays `Buddy: completing with AI...`
-while Ornith works, then inserts its suggestion without executing it.
+The live preview completes directories for `cd`, files for command arguments, and
+shell built-ins or executables for the first word. Nested prefixes such as
+`cd repos/ter` scan that directory. Previewing is debounced, local, and requires no
+GPU inference. When no preview exists, Shift-Tab retains the on-demand Ornith fallback
+and displays `Buddy: completing with AI...` while it works.
+
+The shell runs through a transparent PTY input adapter so ghost text never enters the
+executable command. The adapter activates only at a marked Bash prompt; after Enter,
+interactive programs such as editors, SSH, pagers, and password prompts receive raw
+terminal passthrough. Cursor movement or unsupported input safely suppresses preview
+until the next prompt rather than guessing the state of the command line.
 
 The compact header is designed for a narrow server pane. The bottom line always shows
 the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
 Press **F2** for a compact menu that toggles autocomplete, repeated-command hints,
-forgotten-`buddy` questions, and detailed activity. Detailed activity includes request size, elapsed time, tool
-activity, retrieval sources, and generation progress. A structured copy is written to the private session file
+forgotten-`buddy` questions, and detailed activity. Detailed activity includes request
+size, elapsed time, tool activity, retrieval sources, and generation progress. A
+structured copy is written to the private session file
 `activity.jsonl`. Private model chain-of-thought is not displayed.
 At startup, the full ASCII logo appears for 2.5 seconds when the Buddy pane is at
 least 128 columns wide and 24 rows tall. Smaller panes skip it automatically, and
