@@ -3,20 +3,28 @@
 
 __term_buddy_emit_prompt() {
     local status=$?
-    local hist_num command
-    hist_num="${HISTCMD:-0}"
-    if [[ "$hist_num" != "${__TERM_BUDDY_LAST_HIST:-$hist_num}" ]]; then
-        command="$(builtin history 1)"
-        if [[ "$command" =~ ^[[:space:]]*[0-9]+[[:space:]]+(.*)$ ]]; then
-            command="${BASH_REMATCH[1]}"
-        fi
+    local command_file command
+    command_file="${TERM_BUDDY_EVENTS%/*}/pending-command"
+    if [[ -s "$command_file" ]]; then
+        command="$(<"$command_file")"
+        : > "$command_file"
         "$TERM_BUDDY_LAUNCHER" emit command_finished \
             --events "$TERM_BUDDY_EVENTS" --session "$TERM_BUDDY_SESSION" \
             --pane "${TMUX_PANE:-}" \
             --status "$status" --cwd "$PWD" --command "$command" >/dev/null 2>&1
     fi
-    __TERM_BUDDY_LAST_HIST="$hist_num"
     return "$status"
+}
+
+__term_buddy_mark_command() {
+    local command command_file
+    command="$(builtin history 1)"
+    if [[ "$command" =~ ^[[:space:]]*[0-9]+[[:space:]]+(.*)$ ]]; then
+        command="${BASH_REMATCH[1]}"
+    fi
+    command_file="${TERM_BUDDY_EVENTS%/*}/pending-command"
+    printf '%s' "$command" > "$command_file"
+    chmod 0600 "$command_file" 2>/dev/null || true
 }
 
 __term_buddy_complete() {
@@ -43,6 +51,10 @@ buddy() {
 # Keep the binding installed so the Buddy pane can toggle it live. The function
 # checks a private per-session flag before invoking the model.
 bind -x '"\e[Z":__term_buddy_complete' 2>/dev/null || true
+
+# PS0 is expanded once after Bash accepts a non-empty command and before executing
+# it. Unlike HISTCMD, this still fires when HISTCONTROL removes duplicate entries.
+PS0='$(__term_buddy_mark_command)'"${PS0:-}"
 
 if [[ -n "${PROMPT_COMMAND:-}" ]]; then
     PROMPT_COMMAND="__term_buddy_emit_prompt;${PROMPT_COMMAND}"

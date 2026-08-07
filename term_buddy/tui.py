@@ -649,8 +649,9 @@ class BuddyUI:
         )
         state = f"{stage} {spinner}" if self.busy else "ready"
         self._safe_add(screen, 0, 0, f" Buddy · {state} · {mode}", width - 1, curses.A_BOLD)
-        memory_status = "memory on" if self.project_root else "memory off"
-        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · F2 menu", width - 1, curses.A_DIM)
+        completion = "comp on" if self.runtime_autocomplete else "comp off"
+        memory_status = "mem on" if self.project_root else "mem off"
+        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · {completion} · F2", width - 1, curses.A_DIM)
         content_start = 3
         self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
         panel_height = 0

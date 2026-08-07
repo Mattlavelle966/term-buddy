@@ -148,6 +148,9 @@ twice consecutively is treated as a possible sign that you are stuck—even when
 succeeds—and requests one short hint. A repeated matching failure does the same.
 The live watcher only holds this sequence in memory; it does not modify project
 memory. Identical model tool requests are blocked on repetition to prevent loops.
+Bash command capture remains repetition-aware when `HISTCONTROL` uses `ignoredups`
+or `erasedups`; blank Enter presses are not mistaken for repeated commands. The
+compact header shows `comp on` or `comp off` so autocomplete state is always visible.
 
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
