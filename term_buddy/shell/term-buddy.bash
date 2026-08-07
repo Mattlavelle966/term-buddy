@@ -28,9 +28,28 @@ __term_buddy_mark_command() {
 }
 
 __term_buddy_complete() {
-    local suffix
+    local suffix index
+    local -a local_matches
     if [[ ! -f "${TERM_BUDDY_EVENTS%/*}/autocomplete.enabled" ]]; then
         printf '\a' >&2
+        return 0
+    fi
+    mapfile -t local_matches < <(
+        "$TERM_BUDDY_LAUNCHER" _complete --buffer "$READLINE_LINE" \
+            --point "$READLINE_POINT" --cwd "$PWD" 2>/dev/null
+    )
+    suffix="${local_matches[0]:-}"
+    if [[ -n "$suffix" ]]; then
+        READLINE_LINE="${READLINE_LINE:0:READLINE_POINT}${suffix}${READLINE_LINE:READLINE_POINT}"
+        READLINE_POINT=$((READLINE_POINT + ${#suffix}))
+        return 0
+    fi
+    if ((${#local_matches[@]} > 1)); then
+        printf '\nBuddy matches:' >&2
+        for ((index = 1; index < ${#local_matches[@]} && index <= 12; index++)); do
+            printf '  %s' "${local_matches[index]}" >&2
+        done
+        printf '\n' >&2
         return 0
     fi
     printf '\r\033[2KBuddy: completing with AI...' >&2

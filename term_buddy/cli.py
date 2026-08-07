@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .completion import complete_buffer
 from .config import Config
 from .events import append_event, read_events
 from .model import ModelClient, ModelError
@@ -41,6 +42,11 @@ def parser() -> argparse.ArgumentParser:
     suggest = sub.add_parser("suggest", help=argparse.SUPPRESS)
     suggest.add_argument("--events", type=Path, required=True)
     suggest.add_argument("--buffer", required=True)
+
+    complete = sub.add_parser("_complete", help=argparse.SUPPRESS)
+    complete.add_argument("--buffer", required=True)
+    complete.add_argument("--point", type=int)
+    complete.add_argument("--cwd", required=True)
 
     buddy = sub.add_parser("_buddy", help=argparse.SUPPRESS)
     buddy.add_argument("--events", type=Path, required=True)
@@ -92,6 +98,12 @@ def transcript_tail(events_path: Path, limit: int) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.action == "_complete":
+        result = complete_buffer(args.buffer, args.cwd, args.point)
+        print(result.suffix)
+        for candidate in result.candidates:
+            print(candidate)
+        return 0
     config = load_config(args)
 
     if args.action == "emit":

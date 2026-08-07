@@ -108,9 +108,14 @@ suffix without pressing Enter. Live toggles last for the current session and do 
 rewrite configuration.
 From the left shell, `buddy autocomplete on` and `buddy autocomplete status` control
 the same live setting without involving the model. The header must say `comp on`.
-Completion is deliberately on-demand rather than continuously generating ghost text:
-Shift-Tab displays `Buddy: completing with AI...` while Ornith works, then inserts
-the suggestion into the editable command without executing it.
+Completion is deliberately on-demand rather than continuously generating ghost text.
+Shift-Tab first scans live local state. It completes directories
+for `cd`, files for command arguments, and shell built-ins or executables for the
+first word. Unique matches are inserted immediately; ambiguous matches insert their
+common prefix or display up to twelve choices in the shell. Nested prefixes such as
+`cd repos/ter` scan that directory. This local path requires no GPU inference.
+When the local scan finds nothing, the shell displays `Buddy: completing with AI...`
+while Ornith works, then inserts its suggestion without executing it.
 
 The compact header is designed for a narrow server pane. The bottom line always shows
 the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
