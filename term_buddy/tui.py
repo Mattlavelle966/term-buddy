@@ -108,6 +108,27 @@ class BuddyUI:
         self.trace("setting", f"repeat watch {state}")
         self.write("Info", f"Repeated-command hints are {state} for this session.")
 
+    def handle_runtime_setting(self, line: str) -> bool:
+        autocomplete = re.fullmatch(r"/?autocomplete(?:\s+(on|off|status))?", line.strip(), re.IGNORECASE)
+        if autocomplete:
+            action = (autocomplete.group(1) or "status").lower()
+            if action != "status":
+                self.set_runtime_autocomplete(action == "on")
+            else:
+                state = "on" if self.runtime_autocomplete else "off"
+                self.write("Info", f"Autocomplete is {state}. Toggle with F2 then A; use Shift-Tab in the shell.")
+            return True
+        watch = re.fullmatch(r"/?watch(?:\s+(on|off|status))?", line.strip(), re.IGNORECASE)
+        if watch:
+            action = (watch.group(1) or "status").lower()
+            if action != "status":
+                self.set_repeat_watch(action == "on")
+            else:
+                state = "on" if self.watch_repeats else "off"
+                self.write("Info", f"Repeated-command hints are {state}.")
+            return True
+        return False
+
     def splash_fits(self, height: int, width: int) -> bool:
         return bool(
             self.logo
@@ -422,6 +443,8 @@ class BuddyUI:
                 return
             raw_message = event.get("message", "")
             self.write("You", raw_message)
+            if self.handle_runtime_setting(raw_message):
+                return
             if self.is_project_trigger(raw_message):
                 self.learn_project()
             else:
@@ -566,13 +589,7 @@ class BuddyUI:
                 "/help, and /quit. F2 opens live settings.",
             )
             return True
-        autocomplete = re.fullmatch(r"/autocomplete\s+(on|off)", line, re.IGNORECASE)
-        if autocomplete:
-            self.set_runtime_autocomplete(autocomplete.group(1).lower() == "on")
-            return True
-        watch = re.fullmatch(r"/watch\s+(on|off)", line, re.IGNORECASE)
-        if watch:
-            self.set_repeat_watch(watch.group(1).lower() == "on")
+        if self.handle_runtime_setting(line):
             return True
         if line == "/log":
             self.write("Info", f"Structured harness log: {self.activity_path}")

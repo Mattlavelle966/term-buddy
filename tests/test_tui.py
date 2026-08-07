@@ -180,6 +180,24 @@ class BuddyUiTests(unittest.TestCase):
             self.assertFalse(ui.watch_repeats)
             self.assertTrue(config.proactive)
 
+    def test_shell_question_can_toggle_runtime_autocomplete_without_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(autocomplete=False), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            with patch.object(ui, "request") as request:
+                ui.handle_event({
+                    "kind": "question", "message": "autocomplete on", "cwd": directory,
+                })
+            self.assertTrue(ui.runtime_autocomplete)
+            self.assertTrue(ui.autocomplete_flag.exists())
+            request.assert_not_called()
+
+    def test_runtime_setting_status_does_not_toggle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(autocomplete=False), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            self.assertTrue(ui.handle_runtime_setting("/autocomplete status"))
+            self.assertFalse(ui.runtime_autocomplete)
+            self.assertIn("Autocomplete is off", ui.messages[-1][1])
+
     def test_failure_signature_ignores_changing_numbers(self):
         first = BuddyUI.failure_signature("npm test", 1, "Error: 12 tests failed")
         second = BuddyUI.failure_signature("npm test", 1, "Error: 13 tests failed")

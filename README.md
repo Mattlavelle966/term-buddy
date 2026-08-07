@@ -106,6 +106,11 @@ Press **F2**, then **A**, or enter `/autocomplete on` in the Buddy pane to enabl
 immediately. Press **Shift-Tab** while editing a shell command to insert the returned
 suffix without pressing Enter. Live toggles last for the current session and do not
 rewrite configuration.
+From the left shell, `buddy autocomplete on` and `buddy autocomplete status` control
+the same live setting without involving the model. The header must say `comp on`.
+Completion is deliberately on-demand rather than continuously generating ghost text:
+Shift-Tab displays `Buddy: completing with AI...` while Ornith works, then inserts
+the suggestion into the editable command without executing it.
 
 The compact header is designed for a narrow server pane. The bottom line always shows
 the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
