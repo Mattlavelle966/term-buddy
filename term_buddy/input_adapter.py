@@ -10,6 +10,7 @@ import sys
 import termios
 import time
 import tty
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,9 +21,20 @@ PROMPT_MARKER = re.compile(rb"\x1b\]777;term-buddy-prompt\x07")
 SHIFT_TAB = b"\x1b[Z"
 DIM = b"\x1b[90m"
 RESET = b"\x1b[0m"
-CLEAR_RIGHT = b"\x1b[K"
+SAVE_CURSOR = b"\x1b7"
+RESTORE_CURSOR = b"\x1b8"
 GHOST_START = b"\x1b]777;term-buddy-ghost-start\x07"
 GHOST_END = b"\x1b]777;term-buddy-ghost-end\x07"
+
+
+def display_width(value: str) -> int:
+    """Return the terminal cell width needed to paint and erase a ghost."""
+    width = 0
+    for character in value:
+        if unicodedata.combining(character):
+            continue
+        width += 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+    return width
 
 
 @dataclass(slots=True)
@@ -95,7 +107,14 @@ class InputAdapter:
 
     def _clear_ghost(self) -> None:
         if self.state.ghost:
-            self._write(sys.stdout.fileno(), CLEAR_RIGHT)
+            # Cursor-left cannot cross a wrapped terminal row.  Keep the real
+            # cursor parked at the Readline insertion point instead, repaint
+            # every occupied ghost cell, and restore it exactly where it was.
+            spaces = b" " * display_width(self.state.ghost)
+            self._write(
+                sys.stdout.fileno(),
+                GHOST_START + SAVE_CURSOR + spaces + RESTORE_CURSOR + GHOST_END,
+            )
             self.state.ghost = ""
 
     def _accept_ghost(self) -> bool:
@@ -192,8 +211,13 @@ class InputAdapter:
             return
         self.state.ghost = suffix
         encoded = suffix.encode(errors="replace")
-        self._write(sys.stdout.fileno(), GHOST_START + DIM + encoded + RESET + GHOST_END)
-        self._write(sys.stdout.fileno(), f"\x1b[{len(suffix)}D".encode())
+        # Saving and restoring the cursor is essential here: CSI n D only
+        # moves within the current row, corrupting input when a ghost wraps at
+        # the right edge of a narrow tmux pane.
+        self._write(
+            sys.stdout.fileno(),
+            GHOST_START + SAVE_CURSOR + DIM + encoded + RESET + RESTORE_CURSOR + GHOST_END,
+        )
 
     def _resize_child(self) -> None:
         if self.master_fd < 0:

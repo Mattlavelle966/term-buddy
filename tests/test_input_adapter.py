@@ -2,7 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from term_buddy.input_adapter import InputAdapter, LineState, PROMPT_MARKER, SHIFT_TAB
+from term_buddy.input_adapter import (
+    GHOST_END,
+    GHOST_START,
+    RESTORE_CURSOR,
+    SAVE_CURSOR,
+    InputAdapter,
+    LineState,
+    PROMPT_MARKER,
+    SHIFT_TAB,
+    display_width,
+)
 
 
 class RecordingAdapter(InputAdapter):
@@ -41,3 +51,32 @@ class InputAdapterTests(unittest.TestCase):
     def test_prompt_marker_is_detectable(self):
         marker = b"\x1b]777;term-buddy-prompt\x07"
         self.assertIsNotNone(PROMPT_MARKER.search(marker))
+
+    def test_wrapping_ghost_uses_saved_cursor_and_erases_every_cell(self):
+        with tempfile.TemporaryDirectory() as directory:
+            events = Path(directory) / "events.jsonl"
+            Path(directory, "autocomplete.enabled").write_text("on\n")
+            Path(directory, "repositories").mkdir()
+            adapter = RecordingAdapter(events)
+            adapter.state.reset_prompt(directory)
+            adapter.state.insert("cd repo")
+            adapter.state.changed_at = 0
+
+            adapter._render_preview()
+            rendered = adapter.writes[-1][1]
+            self.assertEqual(
+                rendered,
+                GHOST_START + SAVE_CURSOR + b"\x1b[90msitories/\x1b[0m"
+                + RESTORE_CURSOR + GHOST_END,
+            )
+
+            adapter._clear_ghost()
+            erased = adapter.writes[-1][1]
+            self.assertEqual(
+                erased,
+                GHOST_START + SAVE_CURSOR + b" " * len("sitories/")
+                + RESTORE_CURSOR + GHOST_END,
+            )
+
+    def test_display_width_handles_wide_and_combining_characters(self):
+        self.assertEqual(display_width("abc界e\u0301"), 6)
