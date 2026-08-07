@@ -130,9 +130,10 @@ forgotten-`buddy` questions, and detailed activity. Detailed activity includes r
 size, elapsed time, tool activity, retrieval sources, and generation progress. A
 structured copy is written to the private session file
 `activity.jsonl`. Private model chain-of-thought is not displayed.
-At startup, the full ASCII logo appears for 2.5 seconds when the Buddy pane is at
-least 128 columns wide and 24 rows tall. Smaller panes skip it automatically, and
-any key dismisses it immediately.
+At startup, Buddy temporarily expands across the complete tmux window and clears it
+for a four-second logo splash. It then restores the normal shell/Buddy split, leaving
+your shell startup tools (such as hardware/system summaries) intact. Small terminals
+crop the artwork instead of hiding it, and any key dismisses it immediately.
 
 To build or refresh local project memory, run this from the left shell:
 

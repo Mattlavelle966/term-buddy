@@ -1,3 +1,4 @@
+import os
 import unittest
 import tempfile
 from pathlib import Path
@@ -230,9 +231,21 @@ class BuddyUiTests(unittest.TestCase):
         second = BuddyUI.failure_signature("npm test", 1, "Error: 13 tests failed")
         self.assertEqual(first, second)
 
-    def test_startup_logo_only_appears_when_it_fits(self):
+    def test_startup_logo_crops_instead_of_disappearing(self):
         with tempfile.TemporaryDirectory() as directory:
             ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
             self.assertTrue(ui.logo)
-            self.assertFalse(ui.splash_fits(24, 42))
+            self.assertTrue(ui.splash_fits(24, 42))
             self.assertTrue(ui.splash_fits(30, 140))
+
+    def test_startup_splash_zooms_and_restores_tmux_pane(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"TMUX_PANE": "%9"}):
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            with patch.object(ui, "_tmux_value", side_effect=["0", "1"]), patch(
+                "term_buddy.tui.subprocess.run"
+            ) as run:
+                run.return_value.returncode = 0
+                ui._begin_startup_splash()
+                self.assertTrue(ui.splash_zoomed)
+                ui._finish_startup_splash()
+            self.assertEqual(run.call_count, 2)

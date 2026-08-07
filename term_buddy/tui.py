@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import textwrap
 import threading
 import time
@@ -71,7 +72,11 @@ class BuddyUI:
         self.tool_attempts: dict[str, int] = {}
         self.last_retrieval_sources: list[str] = []
         self.logo = load_logo()
-        self.splash_until = time.monotonic() + 2.5
+        self.splash_until = 0.0
+        self.splash_started = False
+        self.splash_zoomed = False
+        self.splash_next_check = 0.0
+        self.tmux_pane = os.environ.get("TMUX_PANE", "")
         self.settings_open = False
         self.runtime_autocomplete = config.autocomplete
         self.watch_repeats = proactive
@@ -150,23 +155,88 @@ class BuddyUI:
         return False
 
     def splash_fits(self, height: int, width: int) -> bool:
-        return bool(
-            self.logo
-            and len(self.logo) + 2 <= height
-            and max(map(len, self.logo), default=0) + 2 <= width
-        )
+        # Crop on small terminals instead of silently hiding the artwork.
+        return bool(self.logo and height > 2 and width > 2)
+
+    def _tmux_value(self, value: str) -> str:
+        try:
+            completed = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", self.tmux_pane or self.session, value],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=1,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return completed.stdout.strip() if completed.returncode == 0 else ""
+
+    def _begin_startup_splash(self) -> None:
+        self.splash_started = True
+        self.splash_until = time.monotonic() + 4.0
+        if not self.tmux_pane or self._tmux_value("#{window_zoomed_flag}") != "0":
+            return
+        try:
+            completed = subprocess.run(
+                ["tmux", "resize-pane", "-Z", "-t", self.tmux_pane],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1,
+            )
+            self.splash_zoomed = completed.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def _finish_startup_splash(self) -> None:
+        self.splash_until = 0.0
+        if not self.splash_zoomed:
+            return
+        # Avoid re-zooming if the user already restored the split manually.
+        if self._tmux_value("#{window_zoomed_flag}") == "1":
+            try:
+                subprocess.run(
+                    ["tmux", "resize-pane", "-Z", "-t", self.tmux_pane],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+        self.splash_zoomed = False
+
+    def _update_startup_splash(self) -> None:
+        now = time.monotonic()
+        if not self.splash_started:
+            if not self.tmux_pane:
+                self._begin_startup_splash()
+                return
+            if now < self.splash_next_check:
+                return
+            self.splash_next_check = now + 0.2
+            attached = self._tmux_value("#{session_attached}")
+            if attached and attached != "0":
+                self._begin_startup_splash()
+            return
+        if self.splash_until and now >= self.splash_until:
+            self._finish_startup_splash()
 
     def render_splash(self, screen: curses.window, height: int, width: int) -> None:
-        top = max(0, (height - len(self.logo) - 1) // 2)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        logo_width = max(map(len, self.logo), default=0)
+        top = (height - len(self.logo) - 1) // 2
+        left = (width - logo_width) // 2
         attr = curses.color_pair(1) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
         for offset, line in enumerate(self.logo):
-            column = max(0, (width - len(line)) // 2)
-            self._safe_add(screen, top + offset, column, line, width - column - 1, attr)
-        hint = "Term Buddy · press any key"
-        self._safe_add(
-            screen, min(height - 1, top + len(self.logo) + 1),
-            max(0, (width - len(hint)) // 2), hint, len(hint), curses.A_DIM,
-        )
+            row = top + offset
+            if not 0 <= row < height:
+                continue
+            source_start = max(0, -left)
+            column = max(0, left)
+            visible = line[source_start:source_start + max(0, width - column - 1)]
+            self._safe_add(screen, row, column, visible, width - column - 1, attr)
+        hint = "TERM BUDDY · LOCAL TERMINAL COPILOT · press any key"
+        hint_row = top + len(self.logo) + 1
+        if 0 <= hint_row < height:
+            self._safe_add(
+                screen, hint_row, max(0, (width - len(hint)) // 2),
+                hint, min(len(hint), width - 1), curses.A_DIM,
+            )
         screen.refresh()
 
     def trace(self, stage: str, detail: str) -> None:
@@ -686,9 +756,13 @@ class BuddyUI:
     def render(self, screen: curses.window) -> None:
         screen.erase()
         height, width = screen.getmaxyx()
-        if time.monotonic() < self.splash_until and self.splash_fits(height, width):
+        if self.splash_until and time.monotonic() < self.splash_until and self.splash_fits(height, width):
             self.render_splash(screen, height, width)
             return
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
         if height < 7 or width < 24:
             self._safe_add(screen, 0, 0, "Term Buddy: pane too small", width - 1, curses.A_BOLD)
             screen.refresh()
@@ -794,6 +868,7 @@ class BuddyUI:
         self.write("Info", "Ask here or use `buddy QUESTION` in the shell. /help lists commands.")
         running = True
         while running:
+            self._update_startup_splash()
             events, self.offset = read_events(self.events, self.offset)
             for event in events:
                 self.handle_event(event)
@@ -933,10 +1008,12 @@ class BuddyUI:
             except curses.error:
                 time.sleep(0.08)
                 continue
-            if time.monotonic() < self.splash_until and self.splash_fits(*screen.getmaxyx()):
-                self.splash_until = 0.0
-                continue
+            # Zooming the pane generates KEY_RESIZE. It must redraw the logo,
+            # not count as the user's "press any key" dismissal.
             if key == curses.KEY_RESIZE:
+                continue
+            if self.splash_until and time.monotonic() < self.splash_until:
+                self._finish_startup_splash()
                 continue
             if self.settings_open:
                 if key in (curses.KEY_F2, "\x1b"):
@@ -975,4 +1052,7 @@ class BuddyUI:
         return 0
 
     def run(self) -> int:
-        return curses.wrapper(self._run_curses)
+        try:
+            return curses.wrapper(self._run_curses)
+        finally:
+            self._finish_startup_splash()
