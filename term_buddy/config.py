@@ -39,6 +39,7 @@ class Config:
     project_query_tokens: int = 24000
     error_repeat_threshold: int = 2
     automatic_context_tokens: int = 16000
+    context_watch: bool = False
     system_prompt: str = (
         "You are Term Buddy, a concise senior systems debugging partner. Observe the "
         "user's terminal activity, explain failures, spot risks, and suggest a concrete "

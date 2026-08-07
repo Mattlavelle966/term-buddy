@@ -88,6 +88,7 @@ You can also move to the right pane and type questions there. Right-pane command
 - `/learn` updates local project memory without calling the model.
 - `/autocomplete on|off` toggles Shift-Tab completion for this session.
 - `/watch on|off` toggles repeated-command hints for this session.
+- `/context on|off` toggles recovery of questions typed directly into the shell.
 - `/log` shows the structured harness-log path.
 - `/clear` clears the Buddy pane.
 - `/help` displays help.
@@ -120,7 +121,7 @@ while Ornith works, then inserts its suggestion without executing it.
 The compact header is designed for a narrow server pane. The bottom line always shows
 the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
 Press **F2** for a compact menu that toggles autocomplete, repeated-command hints,
-and detailed activity. Detailed activity includes request size, elapsed time, tool
+forgotten-`buddy` questions, and detailed activity. Detailed activity includes request size, elapsed time, tool
 activity, retrieval sources, and generation progress. A structured copy is written to the private session file
 `activity.jsonl`. Private model chain-of-thought is not displayed.
 At startup, the full ASCII logo appears for 2.5 seconds when the Buddy pane is at
@@ -161,6 +162,13 @@ memory. Identical model tool requests are blocked on repetition to prevent loops
 Bash command capture remains repetition-aware when `HISTCONTROL` uses `ignoredups`
 or `erasedups`; blank Enter presses are not mistaken for repeated commands. The
 compact header shows `comp on` or `comp off` so autocomplete state is always visible.
+
+Context-question mode is session-only and disabled by default. Enable it with F2 then
+Q, `/context on` in the Buddy pane, or `buddy context on` in the shell. Term Buddy
+continues recording bounded recent command context, says nothing about valid commands,
+and answers a failed line only when it clearly looks like a natural-language question
+such as `why is this service failing?`. Ordinary typos such as `gti status` remain
+normal shell errors. The compact header shows `ask+` while this mode is enabled.
 
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.

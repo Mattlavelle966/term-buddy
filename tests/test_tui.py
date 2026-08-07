@@ -198,6 +198,33 @@ class BuddyUiTests(unittest.TestCase):
             self.assertFalse(ui.runtime_autocomplete)
             self.assertIn("Autocomplete is off", ui.messages[-1][1])
 
+    def test_context_watch_answers_obvious_forgotten_buddy_question(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            ui.set_context_watch(True)
+            with patch.object(ui, "ask_with_evidence") as ask:
+                ui.handle_event({
+                    "kind": "command_finished", "command": "why is this service failing?",
+                    "status": 127, "cwd": directory, "output": "command not found",
+                })
+            ask.assert_called_once_with("why is this service failing?", directory)
+
+    def test_context_watch_keeps_valid_commands_silent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(context_watch=True), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            with patch.object(ui, "request") as request, patch.object(ui, "ask_with_evidence") as ask:
+                ui.handle_event({
+                    "kind": "command_finished", "command": "git status",
+                    "status": 0, "cwd": directory, "output": "clean",
+                })
+            request.assert_not_called()
+            ask.assert_not_called()
+
+    def test_context_watch_does_not_treat_typo_as_question(self):
+        self.assertFalse(BuddyUI.looks_like_question("gti status"))
+        self.assertTrue(BuddyUI.looks_like_question("what changed in the last commit"))
+        self.assertTrue(BuddyUI.looks_like_question("can you explain this?"))
+
     def test_failure_signature_ignores_changing_numbers(self):
         first = BuddyUI.failure_signature("npm test", 1, "Error: 12 tests failed")
         second = BuddyUI.failure_signature("npm test", 1, "Error: 13 tests failed")

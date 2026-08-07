@@ -75,6 +75,7 @@ class BuddyUI:
         self.settings_open = False
         self.runtime_autocomplete = config.autocomplete
         self.watch_repeats = proactive
+        self.context_watch = config.context_watch
         self.autocomplete_flag = self.events.parent / "autocomplete.enabled"
         self._write_autocomplete_flag()
         self.last_command = ""
@@ -108,6 +109,16 @@ class BuddyUI:
         self.trace("setting", f"repeat watch {state}")
         self.write("Info", f"Repeated-command hints are {state} for this session.")
 
+    def set_context_watch(self, enabled: bool) -> None:
+        self.context_watch = enabled
+        state = "on" if enabled else "off"
+        self.trace("setting", f"context questions {state}")
+        self.write(
+            "Info",
+            f"Context questions are {state}. Valid commands stay silent; obvious questions typed "
+            "without `buddy` are answered.",
+        )
+
     def handle_runtime_setting(self, line: str) -> bool:
         autocomplete = re.fullmatch(r"/?autocomplete(?:\s+(on|off|status))?", line.strip(), re.IGNORECASE)
         if autocomplete:
@@ -126,6 +137,15 @@ class BuddyUI:
             else:
                 state = "on" if self.watch_repeats else "off"
                 self.write("Info", f"Repeated-command hints are {state}.")
+            return True
+        context = re.fullmatch(r"/?context(?:\s+(on|off|status))?", line.strip(), re.IGNORECASE)
+        if context:
+            action = (context.group(1) or "status").lower()
+            if action != "status":
+                self.set_context_watch(action == "on")
+            else:
+                state = "on" if self.context_watch else "off"
+                self.write("Info", f"Context questions are {state}.")
             return True
         return False
 
@@ -273,6 +293,19 @@ class BuddyUI:
         diagnostic = re.sub(r"\b\d+(?:\.\d+)?\b", "#", diagnostic)
         diagnostic = re.sub(r"\s+", " ", diagnostic)[-240:]
         return f"{status}:{executable}:{diagnostic}"
+
+    @staticmethod
+    def looks_like_question(command: str) -> bool:
+        text = " ".join(command.strip().split()).lower()
+        return bool(
+            text.endswith("?")
+            or re.match(
+                r"^(what|why|how|where|when|who|which)\b|"
+                r"^(can|could|would|will|do|does|did|is|are|should)\s+(you|i|we|there|this|that)\b|"
+                r"^(tell me|explain|help me|show me)\b",
+                text,
+            )
+        )
 
     def request(
         self, kind: str, prompt: str = "", *, continuation: bool = False,
@@ -464,6 +497,11 @@ class BuddyUI:
             if self.busy and self.active_kind == "observe":
                 self.cancel_current(silent=True)
             self.write("Shell", f"[{status}] $ {command}")
+            if self.context_watch and status in {126, 127} and self.looks_like_question(command):
+                self.trace("question", "natural-language command recovered")
+                self.write("Info", "That looks like a question; answering it with recent terminal context.")
+                self.ask_with_evidence(command, event.get("cwd", self.cwd))
+                return
             normalized_command = " ".join(command.strip().split())
             if normalized_command and normalized_command == self.last_command:
                 self.command_repeat_count += 1
@@ -585,7 +623,7 @@ class BuddyUI:
             self.write(
                 "Info",
                 "Ask normally; project memory is retrieved automatically. Commands: /stop, "
-                "/learn, /run COMMAND, /autocomplete on|off, /watch on|off, /log, /clear, "
+                "/learn, /run COMMAND, /autocomplete on|off, /watch on|off, /context on|off, /log, /clear, "
                 "/help, and /quit. F2 opens live settings.",
             )
             return True
@@ -631,6 +669,7 @@ class BuddyUI:
             "F2 settings",
             f"[A] Complete {'ON' if self.runtime_autocomplete else 'OFF'}",
             f"[W] Repeats  {'ON' if self.watch_repeats else 'OFF'}",
+            f"[Q] Questions {'ON' if self.context_watch else 'OFF'}",
             f"[D] Details  {'ON' if self.activity_expanded else 'OFF'}",
             "F2/Esc close",
         ]
@@ -666,9 +705,10 @@ class BuddyUI:
         )
         state = f"{stage} {spinner}" if self.busy else "ready"
         self._safe_add(screen, 0, 0, f" Buddy · {state} · {mode}", width - 1, curses.A_BOLD)
-        completion = "comp on" if self.runtime_autocomplete else "comp off"
-        memory_status = "mem on" if self.project_root else "mem off"
-        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · {completion} · F2", width - 1, curses.A_DIM)
+        completion = "comp+" if self.runtime_autocomplete else "comp-"
+        memory_status = "mem+" if self.project_root else "mem-"
+        questions = "ask+" if self.context_watch else "ask-"
+        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · {completion} · {questions} · F2", width - 1, curses.A_DIM)
         content_start = 3
         self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
         panel_height = 0
@@ -899,12 +939,14 @@ class BuddyUI:
             if key == curses.KEY_RESIZE:
                 continue
             if self.settings_open:
-                if key in (curses.KEY_F2, "\x1b", "q", "Q"):
+                if key in (curses.KEY_F2, "\x1b"):
                     self.settings_open = False
                 elif key in ("a", "A"):
                     self.set_runtime_autocomplete(not self.runtime_autocomplete)
                 elif key in ("w", "W"):
                     self.set_repeat_watch(not self.watch_repeats)
+                elif key in ("q", "Q"):
+                    self.set_context_watch(not self.context_watch)
                 elif key in ("d", "D"):
                     self.activity_expanded = not self.activity_expanded
                 continue
