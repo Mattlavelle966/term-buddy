@@ -52,6 +52,14 @@ class Session:
             return False
         return self._tmux("has-session", "-t", self.name, check=False).returncode == 0
 
+    def _install_splash_hook(self, buddy_pane: str) -> None:
+        """Zoom Buddy exactly when the first client can actually see it."""
+        hook = (
+            f"set-hook -u -t {shlex.quote(self.name)} client-attached ; "
+            f"resize-pane -Z -t {shlex.quote(buddy_pane)}"
+        )
+        self._tmux("set-hook", "-t", self.name, "client-attached", hook, check=False)
+
     def create(self) -> None:
         if not shutil.which("tmux"):
             raise SessionError("tmux is required but was not found (Debian/Ubuntu: sudo apt install tmux)")
@@ -116,7 +124,14 @@ class Session:
             terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
             buddy_width = min(self.config.buddy_width, max(20, terminal_width // 2))
             self._tmux("set-option", "-t", self.name, "remain-on-exit", "on")
-            self._tmux("split-window", "-h", "-l", str(buddy_width), "-t", left_pane, buddy_command)
+            split = self._tmux(
+                "split-window", "-h", "-l", str(buddy_width), "-t", left_pane,
+                "-P", "-F", "#{pane_id}", buddy_command,
+            )
+            buddy_pane = split.stdout.strip()
+            if not buddy_pane:
+                raise SessionError("tmux did not report the Buddy pane id")
+            self._install_splash_hook(buddy_pane)
             capture_command = f"exec {shlex.quote(str(launcher))} _capture --output {shlex.quote(str(transcript))}"
             self._tmux("pipe-pane", "-o", "-t", left_pane, capture_command)
             self._tmux("select-pane", "-t", left_pane)

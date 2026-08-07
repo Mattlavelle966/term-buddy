@@ -249,3 +249,13 @@ class BuddyUiTests(unittest.TestCase):
                 self.assertTrue(ui.splash_zoomed)
                 ui._finish_startup_splash()
             self.assertEqual(run.call_count, 2)
+
+    def test_startup_splash_adopts_attach_hook_zoom(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"TMUX_PANE": "%9"}):
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            with patch.object(ui, "_tmux_value", return_value="1"), patch(
+                "term_buddy.tui.subprocess.run"
+            ) as run:
+                ui._begin_startup_splash()
+            self.assertTrue(ui.splash_zoomed)
+            run.assert_not_called()

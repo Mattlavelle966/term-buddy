@@ -171,7 +171,15 @@ class BuddyUI:
     def _begin_startup_splash(self) -> None:
         self.splash_started = True
         self.splash_until = time.monotonic() + 4.0
-        if not self.tmux_pane or self._tmux_value("#{window_zoomed_flag}") != "0":
+        if not self.tmux_pane:
+            return
+        zoomed = self._tmux_value("#{window_zoomed_flag}")
+        # The session's client-attached hook normally zooms first. Adopt that
+        # zoom so this process also owns restoring the split after the splash.
+        if zoomed == "1":
+            self.splash_zoomed = True
+            return
+        if zoomed != "0":
             return
         try:
             completed = subprocess.run(
