@@ -21,6 +21,9 @@ __term_buddy_emit_prompt() {
 
 __term_buddy_complete() {
     local suffix
+    if [[ ! -f "${TERM_BUDDY_EVENTS%/*}/autocomplete.enabled" ]]; then
+        return 0
+    fi
     suffix="$("$TERM_BUDDY_LAUNCHER" suggest --events "$TERM_BUDDY_EVENTS" --buffer "$READLINE_LINE" 2>/dev/null)"
     if [[ -n "$suffix" ]]; then
         READLINE_LINE="${READLINE_LINE}${suffix}"
@@ -37,9 +40,9 @@ buddy() {
         --session "$TERM_BUDDY_SESSION" --pane "${TMUX_PANE:-}" --cwd "$PWD" --message "$*"
 }
 
-if [[ "${TERM_BUDDY_AUTOCOMPLETE:-0}" == "1" ]]; then
-    bind -x '"\e[Z":__term_buddy_complete' 2>/dev/null || true
-fi
+# Keep the binding installed so the Buddy pane can toggle it live. The function
+# checks a private per-session flag before invoking the model.
+bind -x '"\e[Z":__term_buddy_complete' 2>/dev/null || true
 
 if [[ -n "${PROMPT_COMMAND:-}" ]]; then
     PROMPT_COMMAND="__term_buddy_emit_prompt;${PROMPT_COMMAND}"

@@ -144,7 +144,41 @@ class BuddyUiTests(unittest.TestCase):
                 ui.handle_event(failure)
                 request.assert_not_called()
                 ui.handle_event(failure)
-                request.assert_called_once_with("observe")
+                self.assertEqual(request.call_args.args[0], "observe")
+                self.assertIn("appears stuck", request.call_args.args[1])
+
+    def test_repeated_successful_command_triggers_one_hint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            success = {"kind": "command_finished", "command": "git status", "status": 0, "cwd": directory, "output": "clean"}
+            with patch.object(ui, "request") as request:
+                ui.handle_event(success)
+                request.assert_not_called()
+                ui.handle_event(success)
+                self.assertEqual(request.call_args.args[0], "observe")
+                self.assertIn("succeeded", request.call_args.args[1])
+                ui.handle_event(success)
+                self.assertEqual(request.call_count, 1)
+
+    def test_live_autocomplete_toggle_uses_session_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ui = BuddyUI(Config(autocomplete=False), Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            self.assertFalse(ui.autocomplete_flag.exists())
+            ui.set_runtime_autocomplete(True)
+            self.assertTrue(ui.autocomplete_flag.exists())
+            ui.set_runtime_autocomplete(False)
+            self.assertFalse(ui.autocomplete_flag.exists())
+
+    def test_runtime_menu_commands_do_not_change_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(autocomplete=False, proactive=True)
+            ui = BuddyUI(config, Path(directory) / "events.jsonl", "test", yolo=False, proactive=True)
+            self.assertTrue(ui.handle_input("/autocomplete on"))
+            self.assertTrue(ui.runtime_autocomplete)
+            self.assertFalse(config.autocomplete)
+            self.assertTrue(ui.handle_input("/watch off"))
+            self.assertFalse(ui.watch_repeats)
+            self.assertTrue(config.proactive)
 
     def test_failure_signature_ignores_changing_numbers(self):
         first = BuddyUI.failure_signature("npm test", 1, "Error: 12 tests failed")

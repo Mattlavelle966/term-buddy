@@ -35,7 +35,6 @@ class BuddyUI:
         self.events = events
         self.session = session
         self.yolo = yolo
-        self.proactive = proactive
         self.client = ModelClient(config)
         self.memory = ProjectMemory(self.events.parent / "memory.sqlite3")
         self.offset = 0
@@ -73,6 +72,41 @@ class BuddyUI:
         self.last_retrieval_sources: list[str] = []
         self.logo = load_logo()
         self.splash_until = time.monotonic() + 2.5
+        self.settings_open = False
+        self.runtime_autocomplete = config.autocomplete
+        self.watch_repeats = proactive
+        self.autocomplete_flag = self.events.parent / "autocomplete.enabled"
+        self._write_autocomplete_flag()
+        self.last_command = ""
+        self.command_repeat_count = 0
+
+    def _write_autocomplete_flag(self) -> None:
+        try:
+            self.autocomplete_flag.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if self.runtime_autocomplete:
+                self.autocomplete_flag.write_text("on\n", encoding="utf-8")
+                os.chmod(self.autocomplete_flag, 0o600)
+            else:
+                self.autocomplete_flag.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def set_runtime_autocomplete(self, enabled: bool) -> None:
+        self.runtime_autocomplete = enabled
+        self._write_autocomplete_flag()
+        state = "on" if enabled else "off"
+        self.trace("setting", f"autocomplete {state}")
+        self.write("Info", f"Autocomplete is {state} for this session. Press Shift-Tab in the shell.")
+
+    def set_repeat_watch(self, enabled: bool) -> None:
+        self.watch_repeats = enabled
+        self.failure_fingerprint = ""
+        self.failure_count = 0
+        self.last_command = ""
+        self.command_repeat_count = 0
+        state = "on" if enabled else "off"
+        self.trace("setting", f"repeat watch {state}")
+        self.write("Info", f"Repeated-command hints are {state} for this session.")
 
     def splash_fits(self, height: int, width: int) -> bool:
         return bool(
@@ -159,7 +193,8 @@ class BuddyUI:
     def request_context(self, kind: str, prompt: str, *, project_mode: str = "none") -> str:
         self.last_retrieval_sources = []
         if kind == "observe":
-            return self.terminal_context()
+            signal = f"Harness signal: {prompt}\n\n" if prompt else ""
+            return signal + self.terminal_context()
         conversation = self.conversation_context()
         lightweight = "\n\n".join(part for part in (self.terminal_context(), conversation) if part)
         root = self.memory.root_for(self.active_cwd)
@@ -406,9 +441,23 @@ class BuddyUI:
             if self.busy and self.active_kind == "observe":
                 self.cancel_current(silent=True)
             self.write("Shell", f"[{status}] $ {command}")
+            normalized_command = " ".join(command.strip().split())
+            if normalized_command and normalized_command == self.last_command:
+                self.command_repeat_count += 1
+            else:
+                self.last_command = normalized_command
+                self.command_repeat_count = 1 if normalized_command else 0
             if status == 0:
                 self.failure_fingerprint = ""
                 self.failure_count = 0
+                if self.watch_repeats and self.command_repeat_count == 2:
+                    self.trace("repeat", f"{normalized_command} · 2×")
+                    self.write("Info", "You ran the same command twice; asking Buddy for one useful hint.")
+                    self.request(
+                        "observe",
+                        f"The user ran this exact command twice consecutively even though it succeeded: "
+                        f"{normalized_command}. Offer one short, practical hint that may help; do not use tools.",
+                    )
                 return
             output = str(event.get("output", ""))
             executable = command.strip().split(maxsplit=1)[0] if command.strip() else "unknown"
@@ -419,9 +468,15 @@ class BuddyUI:
                 self.failure_fingerprint = fingerprint
                 self.failure_count = 1
             self.trace("error", f"{executable} failed · repeat {self.failure_count}")
-            if self.proactive and self.failure_count == self.config.error_repeat_threshold:
+            repeated_error = self.failure_count == self.config.error_repeat_threshold
+            repeated_command = self.command_repeat_count == 2
+            if self.watch_repeats and (repeated_error or repeated_command):
                 self.write("Info", f"Repeated failure detected ({self.failure_count}×); asking Buddy for one hint.")
-                self.request("observe")
+                self.request(
+                    "observe",
+                    f"The user appears stuck after repeating `{normalized_command}`. "
+                    "Offer one short, practical hint based on the captured errors; do not use tools.",
+                )
         elif kind == "tool_result" and event.get("source") != "model-live":
             self.write("Tool", f"$ {event.get('command')}\n{event.get('output', '')}")
 
@@ -507,8 +562,17 @@ class BuddyUI:
             self.write(
                 "Info",
                 "Ask normally; project memory is retrieved automatically. Commands: /stop, "
-                "/learn, /run COMMAND, /log, /clear, /help, and /quit. F2 toggles diagnostics.",
+                "/learn, /run COMMAND, /autocomplete on|off, /watch on|off, /log, /clear, "
+                "/help, and /quit. F2 opens live settings.",
             )
+            return True
+        autocomplete = re.fullmatch(r"/autocomplete\s+(on|off)", line, re.IGNORECASE)
+        if autocomplete:
+            self.set_runtime_autocomplete(autocomplete.group(1).lower() == "on")
+            return True
+        watch = re.fullmatch(r"/watch\s+(on|off)", line, re.IGNORECASE)
+        if watch:
+            self.set_repeat_watch(watch.group(1).lower() == "on")
             return True
         if line == "/log":
             self.write("Info", f"Structured harness log: {self.activity_path}")
@@ -545,6 +609,24 @@ class BuddyUI:
         except curses.error:
             pass
 
+    def render_settings(self, screen: curses.window, height: int, width: int) -> None:
+        lines = [
+            "F2 settings",
+            f"[A] Complete {'ON' if self.runtime_autocomplete else 'OFF'}",
+            f"[W] Repeats  {'ON' if self.watch_repeats else 'OFF'}",
+            f"[D] Details  {'ON' if self.activity_expanded else 'OFF'}",
+            "F2/Esc close",
+        ]
+        box_width = min(width - 2, max(len(line) for line in lines) + 4)
+        left = max(0, (width - box_width) // 2)
+        top = max(0, (height - len(lines) - 2) // 2)
+        self._safe_add(screen, top, left, "┌" + "─" * (box_width - 2) + "┐", box_width, curses.A_BOLD)
+        for offset, line in enumerate(lines, start=1):
+            body = f" {line}".ljust(box_width - 2)
+            self._safe_add(screen, top + offset, left, "│" + body + "│", box_width, curses.A_BOLD if offset == 1 else 0)
+        self._safe_add(screen, top + len(lines) + 1, left, "└" + "─" * (box_width - 2) + "┘", box_width, curses.A_BOLD)
+        screen.refresh()
+
     def render(self, screen: curses.window) -> None:
         screen.erase()
         height, width = screen.getmaxyx()
@@ -568,7 +650,7 @@ class BuddyUI:
         state = f"{stage} {spinner}" if self.busy else "ready"
         self._safe_add(screen, 0, 0, f" Buddy · {state} · {mode}", width - 1, curses.A_BOLD)
         memory_status = "memory on" if self.project_root else "memory off"
-        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · F2 details", width - 1, curses.A_DIM)
+        self._safe_add(screen, 1, 0, f" {self.config.model} · {memory_status} · F2 menu", width - 1, curses.A_DIM)
         content_start = 3
         self._safe_add(screen, 2, 0, "─" * (width - 1), width - 1, curses.A_DIM)
         panel_height = 0
@@ -607,7 +689,7 @@ class BuddyUI:
             rate = generated_tokens / elapsed if elapsed > 0 else 0
             task = self.active_question.replace("\n", " ") if self.active_question else "No active request"
             details = [
-                "─ Activity trace (F2/click to collapse) " + "─" * width,
+                "─ Activity trace (F2 then D to collapse) " + "─" * width,
                 f" stage={stage}/{self.active_kind or 'idle'}  elapsed={elapsed:.1f}s  request-context≈{self.request_context_tokens:,} tokens",
                 f" progress: reasoning≈{reasoning_tokens:,} tokens  answer≈{generated_tokens:,} tokens  output≈{rate:.1f} token/s",
                 f" cwd: {self.active_cwd}",
@@ -629,6 +711,9 @@ class BuddyUI:
             screen.move(prompt_row, min(width - 2, len(prompt)))
         except curses.error:
             pass
+        if self.settings_open:
+            self.render_settings(screen, height, width)
+            return
         screen.refresh()
 
     def _run_curses(self, screen: curses.window) -> int:
@@ -795,16 +880,26 @@ class BuddyUI:
                 continue
             if key == curses.KEY_RESIZE:
                 continue
+            if self.settings_open:
+                if key in (curses.KEY_F2, "\x1b", "q", "Q"):
+                    self.settings_open = False
+                elif key in ("a", "A"):
+                    self.set_runtime_autocomplete(not self.runtime_autocomplete)
+                elif key in ("w", "W"):
+                    self.set_repeat_watch(not self.watch_repeats)
+                elif key in ("d", "D"):
+                    self.activity_expanded = not self.activity_expanded
+                continue
             if key == curses.KEY_MOUSE:
                 try:
                     _mouse_id, _x, y, _z, _button = curses.getmouse()
                     if y <= 1:
-                        self.activity_expanded = not self.activity_expanded
+                        self.settings_open = True
                 except curses.error:
                     pass
                 continue
             if key == curses.KEY_F2:
-                self.activity_expanded = not self.activity_expanded
+                self.settings_open = True
                 continue
             if key in ("\n", "\r"):
                 line, self.input_buffer = self.input_buffer, ""

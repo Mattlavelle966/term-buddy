@@ -152,7 +152,8 @@ class ModelClient:
         prompt = (
             "Review this latest terminal activity. Reply with one brief, useful observation "
             "or next action. If it succeeded and there is nothing meaningful to add, reply "
-            "with exactly SILENT. This is passive observation: do not request tools and do "
+            "with exactly SILENT. If the harness explicitly reports a repeated command, always "
+            "offer one practical hint. This is passive observation: do not request tools and do "
             "not begin an investigation.\n\n" + transcript
         )
         return self.complete([
@@ -164,7 +165,8 @@ class ModelClient:
         prompt = (
             "Review this latest terminal activity. Reply with one brief, useful observation "
             "or next action. If it succeeded and there is nothing meaningful to add, reply "
-            "with exactly SILENT. This is passive observation: do not request tools and do "
+            "with exactly SILENT. If the harness explicitly reports a repeated command, always "
+            "offer one practical hint. This is passive observation: do not request tools and do "
             "not begin an investigation.\n\n" + transcript
         )
         return self.stream([

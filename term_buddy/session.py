@@ -59,9 +59,15 @@ class Session:
         os.chmod(self.directory, 0o700)
         self.events_path.write_text("", encoding="utf-8")
         transcript = self.directory / "transcript.log"
+        autocomplete_flag = self.directory / "autocomplete.enabled"
         transcript.write_bytes(b"")
         os.chmod(self.events_path, 0o600)
         os.chmod(transcript, 0o600)
+        if self.config.autocomplete:
+            autocomplete_flag.write_text("on\n", encoding="utf-8")
+            os.chmod(autocomplete_flag, 0o600)
+        else:
+            autocomplete_flag.unlink(missing_ok=True)
 
         package_root = Path(__file__).resolve().parent.parent
         launcher = package_root / "bin" / "term-buddy"

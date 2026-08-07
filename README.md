@@ -86,6 +86,8 @@ You can also move to the right pane and type questions there. Right-pane command
 - `/run COMMAND` runs a diagnostic command.
 - `/stop` stops the current Buddy task, clears queued questions, and discards late responses.
 - `/learn` updates local project memory without calling the model.
+- `/autocomplete on|off` toggles Shift-Tab completion for this session.
+- `/watch on|off` toggles repeated-command hints for this session.
 - `/log` shows the structured harness-log path.
 - `/clear` clears the Buddy pane.
 - `/help` displays help.
@@ -99,15 +101,17 @@ back to the model so it can recover instead of abandoning the task.
 Term Buddy also recognizes explicitly labeled Markdown tool requests from models
 that occasionally fail to emit the required `<tool>...</tool>` wrapper.
 
-Autocomplete is off by default because it performs an inference while you edit. To
-enable it, set `"autocomplete": true` in the configuration, restart the session,
-then press **Shift-Tab** while editing a command. Term Buddy inserts the returned
-suffix without pressing Enter.
+Autocomplete is off by default because it performs an inference while you edit.
+Press **F2**, then **A**, or enter `/autocomplete on` in the Buddy pane to enable it
+immediately. Press **Shift-Tab** while editing a shell command to insert the returned
+suffix without pressing Enter. Live toggles last for the current session and do not
+rewrite configuration.
 
 The compact header is designed for a narrow server pane. The bottom line always shows
 the current harness action, such as `RETRIEVE`, `TOOL`, `PREFILL`, or `GENERATE`.
-Press **F2** for request size, elapsed time, tool activity, retrieval sources, and
-generation progress. A structured copy is written to the private session file
+Press **F2** for a compact menu that toggles autocomplete, repeated-command hints,
+and detailed activity. Detailed activity includes request size, elapsed time, tool
+activity, retrieval sources, and generation progress. A structured copy is written to the private session file
 `activity.jsonl`. Private model chain-of-thought is not displayed.
 At startup, the full ASCII logo appears for 2.5 seconds when the Buddy pane is at
 least 128 columns wide and 24 rows tall. Smaller panes skip it automatically, and
@@ -139,10 +143,11 @@ Common Git, GPU, port, disk, and memory questions use deterministic read-only
 diagnostics before the model sees the request. The model receives their authoritative
 output instead of having to invent the correct inspection command.
 
-Successful commands never invoke the model. A single failure is recorded without
-interrupting you. If the same failure occurs twice consecutively, Buddy requests one
-short hint using the relevant recent terminal evidence. Identical model tool requests
-are blocked on repetition to prevent loops.
+Ordinary successful commands never invoke the model. Running the exact same command
+twice consecutively is treated as a possible sign that you are stuck—even when it
+succeeds—and requests one short hint. A repeated matching failure does the same.
+The live watcher only holds this sequence in memory; it does not modify project
+memory. Identical model tool requests are blocked on repetition to prevent loops.
 
 `buddy stop` from the shell (or `/stop` and Ctrl-C in the Buddy pane) stops the
 current task, clears queued requests, and ignores any response that arrives later.
